@@ -4,7 +4,7 @@ Terminal market bergaya TradingView, dibangun dengan React, TypeScript, Vite, Li
 
 ## Jalankan
 
-Node.js 22+:
+Node.js 22.x (TypeScript 5.9.3 dipin agar kompatibel dengan transpiler Vercel Node Functions):
 
 ```sh
 npm ci
