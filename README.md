@@ -13,6 +13,24 @@ npm run dev
 
 Buka `http://localhost:5173`. Vite mem-proxy `/api` ke backend localhost:3001. `npm test` menjalankan pengujian backend; `npm run build` memeriksa TypeScript dan menghasilkan frontend di `dist/`. Untuk menjalankan API sendiri gunakan `npm run start:api`. Untuk deployment, layani `dist/` melalui reverse proxy dan arahkan `/api` ke backend; jangan mengekspos backend langsung ke internet tanpa autentikasi/rate limiting.
 
+## Vercel (frontend + backend dalam satu project)
+
+Import `Nipzy12/bot-trading-terminal` pada Vercel dan pilih branch `feat/trading-terminal` untuk deployment yang ingin diuji. Root Directory: root repository, Framework Preset: Vite, Node.js: 22.x. Konfigurasi tracked `vercel.json` menetapkan Build Command `npm run build`, Output Directory `dist`, dan satu Node.js Function `api/index.ts` dengan batas 15 detik.
+
+Frontend statis dilayani dari `dist/`. Semua `/api/*` diteruskan ke handler Express yang sama tanpa `app.listen()`, sebelum fallback SPA. File `server/index.ts` hanya untuk development lokal. Tidak perlu server Express terpisah, konfigurasi CORS, atau URL backend di frontend. Route API yang tidak dikenal mengembalikan JSON 404, bukan HTML frontend. Respons API memakai `Cache-Control: no-store`.
+
+**Demo tidak memerlukan environment variable apa pun.** Biarkan `EXNESS_DATA_URL` dan `EXNESS_API_KEY` tidak diatur untuk memakai candle simulasi. Jika bridge data terotorisasi sudah tersedia, tambahkan kedua variabel melalui Vercel Project Settings → Environment Variables pada environment yang sesuai (Preview/Production), lalu redeploy. Jangan gunakan prefix `VITE_`, menaruh rahasia di `vercel.json`, atau mengunggah `.env`. API key hanya dibaca oleh function backend. Timeout bridge 8 detik berada di bawah batas function 15 detik. Jika bridge yang dikonfigurasi gagal, API mengembalikan 502; tidak menyamarkannya sebagai demo.
+
+Setelah deployment, periksa:
+
+- `/` menampilkan terminal dan chart demo.
+- `GET /api/health` → 200, `{"status":"ok","execution":"simulation","liveTrading":false}`.
+- `GET /api/market?symbol=XAUUSD&interval=3600` → 200 dengan `source: "simulation"` dan 180 candle tanpa konfigurasi bridge.
+- `POST /api/orders` → 403, `Live trading is disabled`.
+- `/api/unknown` → JSON 404.
+
+Robot tetap berjalan di browser selama tab terbuka; tidak dijalankan sebagai proses background serverless. Tidak ada penyimpanan state akun pada function atau filesystem Vercel. Jangan mengubah Production Branch atau melakukan merge untuk menguji branch ini; gunakan deployment branch/Preview sesuai konfigurasi project Vercel.
+
 ## Fitur
 
 - Chart candlestick interaktif (zoom, pan, crosshair), enam instrumen dan lima timeframe.
