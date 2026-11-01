@@ -37,7 +37,8 @@ Robot tetap berjalan di browser selama tab terbuka; tidak dijalankan sebagai pro
 - Watchlist searchable dengan snapshot demo yang dilabeli, dashboard saldo virtual.
 - Order Buy/Sell paper trading dengan validasi volume 0.01–10 lot; tutup posisi dan riwayat lokal.
 - Robot SMA20 opsional, default berhenti, interval 10 detik, 0.01 lot, maksimal tiga posisi termasuk order manual. Robot berhenti saat halaman ditutup. Ini demonstrasi sinyal dari candle terakhir, bukan backtest atau strategi produksi.
-- Posisi dan riwayat hanya disimpan di memori tab. Refresh mereset akun. Saldo virtual tetap $10.000; belum ada kalkulasi margin, fee, P&L, atau settlement.
+- Akun paper trading tersimpan di localStorage dengan schema versi 1: posisi, SL/TP, riwayat, batas harian dan kunci emergency. Robot selalu berhenti saat reload; status aktif tidak disimpan. Data rusak/tidak kompatibel kembali ke akun demo baru, dan kegagalan tulis storage menampilkan peringatan.
+- Floating P&L, realized P&L, saldo awal $10.000 dan equity. Ukuran kontrak simulasi: XAUUSD 100 oz/lot, EURUSD/GBPUSD/USDJPY 100.000 unit/lot, BTCUSD/ETHUSD 1 unit/lot. P&L USDJPY dikonversi ke USD pada harga exit/mark. Ini asumsi demo, bukan spesifikasi kontrak akun Exness. Tidak menghitung spread, swap, komisi atau margin.
 - Pengujian kontrak backend dan CI GitHub Actions.
 
 ## Data Exness melalui backend
@@ -52,17 +53,17 @@ Backend mengirim `GET <EXNESS_DATA_URL>?symbol=XAUUSD&interval=3600` dengan `Aut
 {"candles":[{"time":1730000000,"open":2740,"high":2744,"low":2738,"close":2742},{"time":1730003600,"open":2742,"high":2746,"low":2741,"close":2745}]}
 ```
 
-Timestamp Unix dalam detik, urut naik, minimal dua candle, maksimal 5000. OHLC harus positif dan konsisten. Backend memvalidasi payload, menolak redirect, menerapkan timeout 8 detik, dan mengembalikan error generik tanpa rahasia. Tidak ada fallback diam-diam ke demo ketika upstream gagal. Chart diambil kembali saat instrumen/timeframe berubah; streaming/polling belum diimplementasikan. Watchlist tetap snapshot demo walaupun bridge aktif.
+Timestamp Unix dalam detik, urut naik, minimal dua candle, maksimal 5000. OHLC harus positif dan konsisten. Backend memvalidasi payload, menolak redirect, menerapkan timeout 8 detik, dan mengembalikan error generik tanpa rahasia. Tidak ada fallback diam-diam ke demo ketika upstream gagal. Chart diambil kembali saat instrumen/timeframe berubah. Kuotasi untuk instrumen terpilih dan semua posisi terbuka dipolling setiap 5 detik. Pada sumber simulasi, mark memiliki variasi sinus kecil untuk mendemonstrasikan P&L; ini bukan harga live. Watchlist tetap snapshot demo walaupun bridge aktif.
 
 API: `GET /api/health`, `GET /api/market?symbol=XAUUSD&interval=3600`. Semua metode `/api/orders` ditolak (403). API key tidak pernah dikirim ke frontend. `.env*`, log, build dan dependensi diabaikan Git.
 
 ## Batasan
 
-Untuk edukasi dan pengembangan. Data simulasi dan sinyal robot tidak boleh dianggap sebagai rekomendasi investasi. Belum ada persistensi, autentikasi multiuser, ataupun koneksi broker yang teruji. Library chart: TradingView Lightweight Charts (Apache-2.0), atribusi: https://www.tradingview.com/ — antarmuka ini bukan produk atau afiliasi TradingView.
+Untuk edukasi dan pengembangan. Data simulasi dan sinyal robot tidak boleh dianggap sebagai rekomendasi investasi. Persistensi hanya pada browser/perangkat yang sama; tidak ada sinkronisasi antarperangkat, autentikasi multiuser, ataupun koneksi broker yang teruji. Library chart: TradingView Lightweight Charts (Apache-2.0), atribusi: https://www.tradingview.com/ — antarmuka ini bukan produk atau afiliasi TradingView.
 
 ## Verifikasi browser
 
-Dengan `npm run dev` aktif, jalankan `npm run test:browser`. Script menggunakan Chromium di `/usr/bin/chromium` (override dengan `CHROMIUM_PATH`), memeriksa chart, order, penutupan/riwayat, robot, timeframe, pemilihan market dan overflow mobile 390px. Screenshot QA ditulis di `/workspace/terminal-desktop.png` dan `/workspace/terminal-mobile.png`, di luar repository.
+Dengan `npm run dev` aktif, jalankan `npm run test:browser`. Script menggunakan Chromium di `/usr/bin/chromium` (override dengan `CHROMIUM_PATH`), memeriksa chart, SL/TP, persistensi posisi/riwayat setelah reload, robot manual, emergency stop, batas rugi dan layout desktop serta Android 360/390/412px. Screenshot QA ditulis di `/workspace/terminal-desktop.png` dan `/workspace/terminal-mobile.png`, di luar repository.
 
 ## Persiapan Git
 
@@ -72,3 +73,11 @@ Branch implementasi: `feat/trading-terminal`. Setelah meninjau perubahan staged:
 git commit -m "feat: add simulation-first trading terminal"
 git push -u origin feat/trading-terminal
 ```
+
+## Kontrol risiko paper trading
+
+- Stop Loss / Take Profit opsional diisi sebagai **harga**, bukan nominal USD. Buy: SL < harga masuk < TP; Sell: TP < harga masuk < SL. Posisi ditutup pada mark pertama yang melewati batas, bukan dijamin tepat di harga SL/TP. Pemantauan hanya berjalan ketika halaman terbuka dan feed tersedia.
+- Riwayat mencatat waktu masuk/keluar, harga exit, alasan penutupan, volume dan P&L. Maksimal 100 posisi manual dan 5.000 transaksi riwayat. Tidak ada endpoint order broker.
+- Batas rugi robot default $100 per hari UTC: jumlah kerugian realized hari ini ditambah floating loss, tanpa mengurangi kerugian dengan profit. Setelah tersentuh, robot terkunci sampai hari UTC berikutnya meskipun harga pulih atau batas diperbesar. Robot harus dinyalakan lagi secara manual. Batas harian menghentikan pembukaan oleh robot; posisi yang ada tetap mengikuti SL/TP, dan order manual tetap tersedia kecuali emergency aktif.
+- Emergency stop menghentikan robot, menutup semua posisi dengan kuotasi tersedia, dan menyimpan kunci emergency. Posisi tanpa kuotasi menunggu feed pulih. Buka kunci secara manual setelah semua posisi ditutup; tindakan ini tidak menyalakan robot.
+- Kuotasi yang gagal diperbarui dihapus dan robot dihentikan; posisi menunggu feed untuk valuasi/penutupan. Tidak ada eksekusi saat tab ditutup. Gunakan satu tab untuk paper trading: localStorage bukan database transaksi multi-tab. Penghapusan storage browser mereset akun dan batas risiko.

@@ -1207,3 +1207,291 @@ footer small {
     gap: 5px;
   }
 }
+/* Paper account and touch-first trade cards */
+.pnl-strip {
+  display: flex;
+  align-items: center;
+  gap: 25px;
+  padding: 16px;
+  border-bottom: 1px solid #293347;
+  flex-wrap: wrap;
+  font-size: 10px;
+}
+.pnl-strip strong {
+  display: block;
+  margin-top: 7px;
+  font:
+    500 18px "IBM Plex Mono",
+    monospace;
+}
+.pnl-strip small {
+  margin-left: auto;
+  color: #7e8da8;
+  font-size: 9px;
+}
+.stops {
+  margin: 0 17px 17px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.stops label {
+  margin: 0;
+  grid-row: 1;
+  font-size: 9px;
+}
+.stops input,
+.robot input {
+  background: #0b111c;
+  color: #dce6f8;
+  border: 1px solid #34415a;
+  border-radius: 5px;
+  padding: 10px;
+  width: 100%;
+  min-width: 0;
+  font-size: 12px;
+}
+.robot label {
+  margin: 14px 0 8px;
+  font-size: 10px;
+}
+.robot > button {
+  min-height: 40px;
+  margin-top: 9px;
+}
+.robot .emergency {
+  background: #44212c;
+  color: #ff9bad;
+  border-color: #804052;
+  justify-content: center;
+}
+.storage-alert {
+  padding: 12px;
+}
+.trade-heading,
+.trade-card {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1fr 1fr 1.2fr;
+  gap: 12px;
+  align-items: center;
+  padding: 15px 17px;
+  border-bottom: 1px solid #263046;
+}
+.trade-heading {
+  font-size: 8px;
+  color: #7c8ba6;
+}
+.trade-card {
+  font-size: 11px;
+}
+.trade-card strong {
+  font-weight: 500;
+}
+.trade-card small {
+  display: block;
+  color: #7b8aa5;
+  font-size: 9px;
+  margin-top: 6px;
+  line-height: 1.5;
+}
+.trade-card button {
+  border: 1px solid #4c5d7c;
+  border-radius: 5px;
+  padding: 10px 12px;
+  min-height: 40px;
+  background: #222f46;
+}
+.trade-list {
+  max-height: 480px;
+  overflow: auto;
+}
+.positions {
+  align-self: start;
+}
+.robot button:disabled {
+  opacity: 0.45;
+}
+.order-panel {
+  grid-row: span 2;
+}
+.positions {
+  grid-row: 2;
+}
+.watchlist {
+  grid-row: 3;
+  grid-column: 2;
+}
+main {
+  grid-template-rows: auto auto;
+}
+.chart-panel {
+  grid-row: 1;
+}
+.account .metric {
+  min-width: 160px;
+}
+@media (max-width: 1100px) {
+  .trade-heading {
+    display: none;
+  }
+  .trade-card {
+    grid-template-columns: 1.4fr 1fr 1fr;
+  }
+  .trade-card > div:last-child {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+  .trade-card > div:nth-child(4) {
+    grid-column: 2;
+  }
+  .trade-card > div:nth-child(3) {
+    grid-column: 1;
+  }
+}
+@media (max-width: 700px) {
+  .account {
+    flex-wrap: wrap;
+  }
+  .account > .metric {
+    border: 0;
+    padding: 0;
+    min-width: 100%;
+  }
+  .account .metric strong {
+    font-size: 21px;
+  }
+  .rail {
+    width: 45px;
+  }
+  .workspace {
+    margin-left: 45px;
+    width: calc(100% - 45px);
+  }
+  .rail > button {
+    width: 34px;
+  }
+  .brand-icon {
+    width: 31px;
+  }
+  .order-panel {
+    grid-row: 3;
+    grid-column: 1;
+  }
+  .watchlist {
+    grid-row: 4;
+    grid-column: 1;
+  }
+  .positions {
+    grid-row: 2;
+    grid-column: 1;
+  }
+  .trade-list {
+    padding: 10px;
+    max-height: 650px;
+  }
+  .trade-card {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    padding: 15px;
+    margin-bottom: 10px;
+    background: #161f2e;
+    border: 1px solid #34405a;
+    border-radius: 8px;
+    font-size: 12px;
+  }
+  .trade-card > div:nth-child(n) {
+    grid-column: auto;
+    grid-row: auto;
+  }
+  .trade-card > div:last-child {
+    grid-column: 1 / -1;
+  }
+  .trade-card > div:last-child button {
+    width: 100%;
+    min-height: 44px;
+  }
+  .trade-card small {
+    font-size: 10px;
+  }
+  .pnl-strip {
+    gap: 20px;
+  }
+  .pnl-strip small {
+    margin: 0;
+    width: 100%;
+  }
+  .stops input,
+  .robot input,
+  .volume-control {
+    min-height: 44px;
+    font-size: 16px;
+  }
+  .robot > button {
+    min-height: 44px;
+    font-size: 11px;
+  }
+  .submit-order {
+    min-height: 48px;
+  }
+  .position-tabs button {
+    min-height: 44px;
+  }
+  .toolbar button {
+    min-height: 40px;
+  }
+  .search {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  .side-toggle button {
+    min-height: 44px;
+  }
+  .toast {
+    font-size: 12px;
+    bottom: 15px;
+    min-width: 85vw;
+  }
+  .chart-wrap {
+    height: 280px;
+  }
+  .ohlc {
+    flex-wrap: wrap;
+  }
+  .presets button {
+    min-height: 40px;
+  }
+  header {
+    gap: 12px;
+    padding: 0 12px;
+  }
+  nav {
+    gap: 10px;
+  }
+  .header-right {
+    gap: 0;
+  }
+}
+@media (max-width: 700px) {
+  .robot .emergency {
+    position: fixed;
+    bottom: max(12px, env(safe-area-inset-bottom));
+    left: 58px;
+    right: 12px;
+    width: auto;
+    z-index: 15;
+    box-shadow: 0 4px 25px #000b;
+    min-height: 48px;
+    border: 1px solid #ae566d;
+    font-size: 12px;
+  }
+  .workspace {
+    padding-bottom: 70px;
+  }
+  .robot p {
+    line-height: 1.8;
+  }
+  .robot p br {
+    display: initial;
+  }
+}

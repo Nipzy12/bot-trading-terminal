@@ -27,19 +27,27 @@ import {
   X,
 } from "lucide-react";
 import "./style.css";
+import {
+  STORAGE_KEY,
+  fresh,
+  restore,
+  pnl,
+  close,
+  settle,
+  blocked,
+  dailyLoss,
+  validStops,
+  type Account,
+  type Position,
+  type Closed,
+  type Quotes,
+} from "./paper";
 type Candle = {
   time: number;
   open: number;
   high: number;
   low: number;
   close: number;
-};
-type Position = {
-  id: number;
-  symbol: string;
-  side: "Buy" | "Sell";
-  size: number;
-  entry: number;
 };
 const markets = [
   { symbol: "XAUUSD", name: "Gold / US Dollar", price: 2742.68, change: 0.84 },
@@ -68,7 +76,7 @@ const markets = [
     price: 2518.34,
     change: -0.67,
   },
-];
+] as const;
 const fmt = (n: number) =>
   n.toLocaleString("en-US", {
     minimumFractionDigits: 2,
@@ -107,7 +115,7 @@ function Chart({ data }: { data: Candle[] }) {
   return <div className="chart" ref={ref} />;
 }
 function App() {
-  const [symbol, setSymbol] = useState("XAUUSD"),
+  const [symbol, setSymbol] = useState<Position["symbol"]>("XAUUSD"),
     [interval, setIntervalValue] = useState("3600"),
     [data, setData] = useState<Candle[]>([]),
     [source, setSource] = useState("simulation"),
@@ -115,14 +123,97 @@ function App() {
     [loading, setLoading] = useState(true),
     [side, setSide] = useState<"Buy" | "Sell">("Buy"),
     [size, setSize] = useState("0.01"),
-    [positions, setPositions] = useState<Position[]>([]),
-    [history, setHistory] = useState<Position[]>([]),
+    [account, setAccount] = useState<Account>(() => {
+      try {
+        return restore(localStorage.getItem(STORAGE_KEY));
+      } catch {
+        return fresh();
+      }
+    }),
+    [quotes, setQuotes] = useState<Quotes>({}),
+    [storageError, setStorageError] = useState(false),
+    [sl, setSl] = useState(""),
+    [tp, setTp] = useState(""),
     [robot, setRobot] = useState(false),
     [tab, setTab] = useState("Posisi"),
     [notice, setNotice] = useState(""),
     [search, setSearch] = useState("");
+  const { positions, history } = account;
+  const riskBlocked = blocked(account, quotes);
+  const floating = positions.reduce(
+    (sum, p) => sum + (quotes[p.symbol] ? pnl(p, quotes[p.symbol]) : 0),
+    0,
+  );
+  const realized = history.reduce((sum, p) => sum + p.pnl, 0);
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(account));
+      setStorageError(false);
+    } catch {
+      setStorageError(true);
+    }
+  }, [account]);
+  useEffect(() => {
+    setAccount((a) => settle(a, quotes));
+  }, [quotes]);
+  useEffect(() => {
+    if (riskBlocked) setRobot(false);
+  }, [riskBlocked]);
+  const quoteSymbols = [...new Set([symbol, ...positions.map((p) => p.symbol)])]
+    .sort()
+    .join(",");
+  useEffect(() => {
+    const controller = new AbortController();
+    let refreshing = false;
+    async function refresh() {
+      if (refreshing) return;
+      refreshing = true;
+      await Promise.all(
+        quoteSymbols.split(",").map(async (instrument) => {
+          try {
+            const response = await fetch(
+              `/api/market?symbol=${instrument}&interval=300`,
+              {
+                signal: AbortSignal.any([
+                  controller.signal,
+                  AbortSignal.timeout(8000),
+                ]),
+              },
+            );
+            if (!response.ok) throw Error("Quote unavailable");
+            const feed = await response.json();
+            const last = feed.candles.at(-1)?.close;
+            if (!Number.isFinite(last) || last <= 0)
+              throw Error("Invalid quote");
+            const mark =
+              feed.source === "simulation"
+                ? last * (1 + Math.sin(Date.now() / 15000) * 0.00015)
+                : last;
+            if (!controller.signal.aborted)
+              setQuotes((q) => ({ ...q, [instrument]: mark }));
+          } catch {
+            if (!controller.signal.aborted) {
+              setQuotes((q) => {
+                const next = { ...q };
+                delete next[instrument];
+                return next;
+              });
+              setRobot(false);
+            }
+          }
+        }),
+      );
+      refreshing = false;
+    }
+    void refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [quoteSymbols]);
   const current = markets.find((m) => m.symbol === symbol)!;
-  const price = data.at(-1)?.close ?? current.price;
+  const price = quotes[symbol] ?? data.at(-1)?.close ?? current.price;
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -158,34 +249,77 @@ function App() {
       setNotice("Volume harus 0.01–10 lot dan data market harus tersedia.");
       return;
     }
-    setPositions((p) => [
-      ...p,
-      { id: Date.now(), symbol, side: orderSide, size: volume, entry: price },
-    ]);
+    const stop = sl === "" ? undefined : Number(sl),
+      take = tp === "" ? undefined : Number(tp);
+    if (
+      !quotes[symbol] ||
+      !validStops(orderSide, price, stop, take) ||
+      (stop !== undefined && (!Number.isFinite(stop) || stop <= 0)) ||
+      (take !== undefined && (!Number.isFinite(take) || take <= 0))
+    ) {
+      setNotice(
+        "SL/TP tidak valid: Buy SL < harga < TP; Sell TP < harga < SL.",
+      );
+      return;
+    }
+    setAccount((a) =>
+      a.emergency || a.positions.length >= 100
+        ? a
+        : {
+            ...a,
+            positions: [
+              ...a.positions,
+              {
+                id: crypto.randomUUID(),
+                symbol,
+                side: orderSide,
+                size: volume,
+                entry: price,
+                openedAt: Date.now(),
+                sl: stop,
+                tp: take,
+              },
+            ],
+          },
+    );
     setNotice(`Order ${orderSide} simulasi berhasil dibuat.`);
   }
+  const robotContext = useRef({ quotes, price });
+  robotContext.current = { quotes, price };
   useEffect(() => {
-    if (!robot) return;
+    if (!robot || riskBlocked || loading || error || !quotes[symbol]) return;
     const timer = window.setInterval(() => {
       if (data.length < 20) return;
       const avg = data.slice(-20).reduce((s, c) => s + c.close, 0) / 20;
-      setPositions((p) =>
-        p.length >= 3
-          ? p
-          : [
-              ...p,
-              {
-                id: Date.now(),
-                symbol,
-                side: price > avg ? "Buy" : "Sell",
-                size: 0.01,
-                entry: price,
-              },
-            ],
+      const { quotes, price } = robotContext.current;
+      setAccount((a) =>
+        !quotes[symbol] || blocked(a, quotes) || a.positions.length >= 3
+          ? a
+          : {
+              ...a,
+              positions: [
+                ...a.positions,
+                {
+                  id: crypto.randomUUID(),
+                  symbol,
+                  side: price > avg ? "Buy" : "Sell",
+                  size: 0.01,
+                  entry: price,
+                  openedAt: Date.now(),
+                },
+              ],
+            },
       );
     }, 10000);
     return () => clearInterval(timer);
-  }, [robot, data, symbol, price]);
+  }, [robot, riskBlocked, data, symbol, loading, error]);
+  function emergency() {
+    setRobot(false);
+    setAccount((a) => settle({ ...a, emergency: true }, quotes));
+    setNotice(
+      "Emergency stop aktif. Posisi tanpa kuotasi menunggu feed pulih untuk ditutup.",
+    );
+  }
   return (
     <div className="app">
       <aside className="rail">
@@ -281,10 +415,8 @@ function App() {
             <span>
               Saldo virtual <Wallet size={13} />
             </span>
-            <strong>
-              $10,000<span>.00</span>
-            </strong>
-            <small>Akun demo · USD</small>
+            <strong>${fmt(10000 + realized)}</strong>
+            <small>Akun demo · USD · Realized ${fmt(realized)}</small>
           </div>
           <div className="metric">
             <span>Posisi terbuka</span>
@@ -519,6 +651,28 @@ function App() {
                 </button>
               ))}
             </div>
+            <div className="stops">
+              <label htmlFor="sl">Stop Loss (harga)</label>
+              <input
+                id="sl"
+                type="number"
+                step="any"
+                min="0"
+                placeholder="Opsional"
+                value={sl}
+                onChange={(e) => setSl(e.target.value)}
+              />
+              <label htmlFor="tp">Take Profit (harga)</label>
+              <input
+                id="tp"
+                type="number"
+                step="any"
+                min="0"
+                placeholder="Opsional"
+                value={tp}
+                onChange={(e) => setTp(e.target.value)}
+              />
+            </div>
             <div className="order-details">
               <p>
                 Harga indikatif <strong>{fmt(price)}</strong>
@@ -531,7 +685,9 @@ function App() {
               </p>
             </div>
             <button
-              disabled={loading || !!error}
+              disabled={
+                loading || !!error || account.emergency || !quotes[symbol]
+              }
               className={`submit-order ${side === "Sell" ? "sell-bg" : ""}`}
               onClick={() => order()}
             >
@@ -557,18 +713,77 @@ function App() {
                 <br />
                 Maksimal 3 posisi, volume 0.01 lot.
               </p>
+              <label htmlFor="daily-limit">Batas rugi harian (USD, UTC)</label>
+              <input
+                id="daily-limit"
+                type="number"
+                min="1"
+                max="10000"
+                value={account.dailyLimit}
+                disabled={robot}
+                onChange={(e) => {
+                  const limit = Number(e.target.value);
+                  if (Number.isFinite(limit) && limit >= 1 && limit <= 10000)
+                    setAccount((a) =>
+                      settle({ ...a, dailyLimit: limit }, quotes),
+                    );
+                }}
+              />
+              <p>
+                Kerugian hari ini: ${fmt(dailyLoss(account, quotes))} / $
+                {fmt(account.dailyLimit)}
+                {riskBlocked ? " · Robot terkunci" : ""}
+              </p>
               <button
                 className={robot ? "robot-running" : ""}
-                disabled={loading || !!error}
+                disabled={
+                  !robot &&
+                  (loading || !!error || riskBlocked || !quotes[symbol])
+                }
                 onClick={() => setRobot(!robot)}
               >
                 <span className="status-dot" />
                 {robot ? "Hentikan robot" : "Jalankan robot simulasi"}
                 <Activity size={14} />
               </button>
+              <button className="emergency" onClick={emergency}>
+                Emergency stop · tutup semua
+              </button>
+              {account.emergency && (
+                <button
+                  onClick={() =>
+                    setAccount((a) => ({ ...a, emergency: false }))
+                  }
+                  disabled={positions.length > 0}
+                >
+                  Buka kunci manual (robot tetap berhenti)
+                </button>
+              )}
             </div>
           </aside>
           <section className="positions panel">
+            <div className="pnl-strip">
+              <div>
+                Floating P&L{" "}
+                <strong className={floating >= 0 ? "green" : "red"}>
+                  ${fmt(floating)}
+                </strong>
+              </div>
+              <div>
+                Equity <strong>${fmt(10000 + realized + floating)}</strong>
+              </div>
+              <small>
+                {positions.some((p) => !quotes[p.symbol])
+                  ? "Menunggu kuotasi · P&L parsial"
+                  : "Mark demo / bridge · refresh 5 detik"}
+              </small>
+            </div>
+            {storageError && (
+              <p role="alert" className="red storage-alert">
+                Penyimpanan tidak tersedia. Perubahan hanya tersimpan pada tab
+                ini.
+              </p>
+            )}
             <div className="position-tabs">
               {["Posisi", "Riwayat"].map((t) => (
                 <button
@@ -584,46 +799,72 @@ function App() {
               ))}
               <span className="muted">Akun simulasi</span>
             </div>
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>INSTRUMEN</th>
-                    <th>ARAH</th>
-                    <th>VOLUME</th>
-                    <th>HARGA MASUK</th>
-                    <th>STATUS</th>
-                    <th>AKSI</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(tab === "Posisi" ? positions : history).map((p) => (
-                    <tr key={p.id}>
-                      <td>{p.symbol}</td>
-                      <td className={p.side === "Buy" ? "green" : "red"}>
-                        {p.side}
-                      </td>
-                      <td>{p.size} lot</td>
-                      <td>{fmt(p.entry)}</td>
-                      <td>{tab === "Posisi" ? "Terbuka" : "Ditutup"}</td>
-                      <td>
-                        {tab === "Posisi" && (
-                          <button
-                            onClick={() => {
-                              setPositions((prev) =>
-                                prev.filter((x) => x.id !== p.id),
-                              );
-                              setHistory((prev) => [p, ...prev]);
-                            }}
-                          >
-                            Tutup
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="trade-list">
+              <div className="trade-heading">
+                <span>INSTRUMEN / ARAH</span>
+                <span>VOLUME / MASUK</span>
+                <span>SL / TP</span>
+                <span>P&L (USD)</span>
+                <span>AKSI / EXIT</span>
+              </div>
+              {(tab === "Posisi" ? positions : history).map((row) => {
+                const p: Position | Closed = row;
+                const done = (p: Position | Closed): p is Closed =>
+                  "closedAt" in p;
+                const value = done(p)
+                  ? p.pnl
+                  : quotes[p.symbol]
+                    ? pnl(p, quotes[p.symbol])
+                    : undefined;
+                return (
+                  <article className="trade-card" key={p.id}>
+                    <div>
+                      <strong>{p.symbol}</strong>
+                      <small className={p.side === "Buy" ? "green" : "red"}>
+                        {p.side} · {done(p) ? "Ditutup" : "Terbuka"}
+                      </small>
+                      <small>
+                        {new Date(p.openedAt).toLocaleString("id-ID")}
+                      </small>
+                    </div>
+                    <div>
+                      <span>{p.size} lot</span>
+                      <small>Masuk {fmt(p.entry)}</small>
+                    </div>
+                    <div>
+                      <small>SL {p.sl ? fmt(p.sl) : "—"}</small>
+                      <small>TP {p.tp ? fmt(p.tp) : "—"}</small>
+                    </div>
+                    <div>
+                      <strong className={(value ?? 0) >= 0 ? "green" : "red"}>
+                        {value === undefined ? "Menunggu" : `$${fmt(value)}`}
+                      </strong>
+                      <small>{done(p) ? p.reason : "Floating P&L"}</small>
+                    </div>
+                    <div>
+                      {done(p) ? (
+                        <>
+                          <span>Exit {fmt(p.exit)}</span>
+                          <small>
+                            {new Date(p.closedAt).toLocaleString("id-ID")}
+                          </small>
+                        </>
+                      ) : (
+                        <button
+                          disabled={!quotes[p.symbol]}
+                          onClick={() =>
+                            setAccount((a) =>
+                              settle(close(a, p.id, quotes), quotes),
+                            )
+                          }
+                        >
+                          Tutup
+                        </button>
+                      )}
+                    </div>
+                  </article>
+                );
+              })}
               {(tab === "Posisi" ? positions : history).length === 0 && (
                 <div className="empty">
                   <Layers size={23} />
@@ -632,9 +873,7 @@ function App() {
                       ? "Belum ada posisi terbuka"
                       : "Belum ada riwayat transaksi"}
                   </strong>
-                  <span>
-                    Mulai eksplorasi dengan order simulasi pertama Anda.
-                  </span>
+                  <span>Paper trading tersimpan di perangkat ini.</span>
                 </div>
               )}
             </div>

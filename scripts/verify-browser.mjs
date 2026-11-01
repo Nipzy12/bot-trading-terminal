@@ -12,44 +12,129 @@ try {
   page.setDefaultTimeout(15000);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto("http://localhost:5173", { waitUntil: "domcontentloaded" });
-  console.log("Page loaded");
+  await page.goto(process.env.BASE_URL || "http://localhost:5173", {
+    waitUntil: "domcontentloaded",
+  });
   await page.locator("canvas").first().waitFor({ state: "attached" });
-  await page.getByRole("button", { name: "Buy XAUUSD" }).click();
-  await page.getByRole("cell", { name: "Terbuka", exact: true }).waitFor();
-  await page.getByRole("button", { name: "Tutup", exact: true }).click();
-  await page.getByRole("button", { name: "Riwayat 1" }).click();
-  await page.getByRole("cell", { name: "Ditutup", exact: true }).waitFor();
-  await page.getByRole("button", { name: "Jalankan robot simulasi" }).click();
-  await page.waitForTimeout(10500);
-  await page.getByRole("button", { name: "Posisi 1" }).click();
-  await page.getByRole("cell", { name: "Terbuka", exact: true }).waitFor();
-  await page.getByRole("button", { name: "Hentikan robot" }).click();
-  await page.getByRole("button", { name: "4h", exact: true }).click();
-  await page.locator("canvas").first().waitFor({ state: "attached" });
-  await page.getByRole("textbox", { name: "Cari market" }).fill("EURUSD");
-  await page.locator(".watch-row").click();
-  await page.getByRole("button", { name: "Buy EURUSD" }).waitFor();
-  await page.locator("canvas").first().waitFor({ state: "attached" });
+  const buy = page.getByRole("button", { name: "Buy XAUUSD" });
+  await buy.waitFor();
+  await page.waitForFunction(
+    () => !document.querySelector(".submit-order").disabled,
+  );
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Hentikan robot", exact: true })
+      .count(),
+    0,
+  );
+  await page.getByLabel("Stop Loss (harga)").fill("2700");
+  await page.getByLabel("Take Profit (harga)").fill("2800");
+  await buy.click();
+  await page.locator(".trade-card").waitFor();
+  assert.match(await page.locator(".trade-card").innerText(), /SL 2,700/);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator(".trade-card").waitFor();
+  assert.equal(await page.locator(".trade-card").count(), 1);
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Hentikan robot", exact: true })
+      .count(),
+    0,
+  );
+  await page
+    .getByRole("button", { name: "Jalankan robot simulasi", exact: true })
+    .click();
+  await page.waitForFunction(
+    () => document.querySelectorAll(".trade-card").length === 2,
+    {},
+    { timeout: 15000 },
+  );
   await page.screenshot({
     path: "/workspace/terminal-desktop.png",
     fullPage: true,
   });
-  await page.setViewportSize({ width: 390, height: 844 });
-  assert.equal(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth,
-    ),
-    true,
-    "Mobile horizontal overflow",
-  );
+  for (const width of [360, 390, 412]) {
+    await page.setViewportSize({ width, height: 844 });
+    assert.equal(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+      true,
+      `Overflow at ${width}`,
+    );
+    assert.equal(
+      await page
+        .locator(".trade-card")
+        .first()
+        .evaluate(
+          (e) => getComputedStyle(e).gridTemplateColumns.split(" ").length,
+        ),
+      2,
+    );
+  }
   await page.screenshot({
     path: "/workspace/terminal-mobile.png",
     fullPage: true,
   });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator(".trade-card").first().waitFor();
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Hentikan robot", exact: true })
+      .count(),
+    0,
+  );
+  await page.waitForFunction(
+    () => !document.querySelector(".submit-order").disabled,
+  );
+  await page
+    .getByRole("button", { name: "Emergency stop · tutup semua", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Riwayat 2", exact: true }).click();
+  assert.equal(await page.locator(".trade-card").count(), 2);
+  assert.match(
+    await page.locator(".trade-card").first().innerText(),
+    /Emergency/,
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByRole("button", { name: "Riwayat 2", exact: true }).click();
+  assert.equal(await page.locator(".trade-card").count(), 2);
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Jalankan robot simulasi", exact: true })
+      .isDisabled(),
+    true,
+  );
+  await page
+    .getByRole("button", {
+      name: "Buka kunci manual (robot tetap berhenti)",
+      exact: true,
+    })
+    .click();
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Hentikan robot", exact: true })
+      .count(),
+    0,
+  );
+  // Persist a real daily-loss record to verify startup risk blocking in the UI.
+  await page.evaluate(() => {
+    const a = JSON.parse(localStorage.getItem("nexus.paper.v1"));
+    a.history[0].pnl = -150;
+    a.history[0].closedAt = Date.now();
+    localStorage.setItem("nexus.paper.v1", JSON.stringify(a));
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.getByText("Robot terkunci", { exact: false }).waitFor();
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Jalankan robot simulasi", exact: true })
+      .isDisabled(),
+    true,
+  );
   assert.deepEqual(errors, []);
   console.log(
-    "Browser checks passed: chart, paper order, close/history, robot, timeframe, market, mobile layout; no runtime errors.",
+    "PASS: chart, SL/TP form, persisted positions/history, robot explicit start, emergency, daily risk lock, desktop and Android 360/390/412px; no runtime errors.",
   );
 } finally {
   await browser.close();
