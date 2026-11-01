@@ -119,6 +119,8 @@ function App() {
     [interval, setIntervalValue] = useState("3600"),
     [data, setData] = useState<Candle[]>([]),
     [source, setSource] = useState("simulation"),
+    [feedPause, setFeedPause] = useState(""),
+    [feedEpoch, setFeedEpoch] = useState(0),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(true),
     [side, setSide] = useState<"Buy" | "Sell">("Buy"),
@@ -138,6 +140,21 @@ function App() {
     [tab, setTab] = useState("Posisi"),
     [notice, setNotice] = useState(""),
     [search, setSearch] = useState("");
+  const paused = useRef(false);
+  function pauseFeed(seconds: number) {
+    paused.current = true;
+    setRobot(false);
+    setQuotes({});
+    setFeedPause(
+      `EXNESS rate limit. Tunggu ${seconds} detik sebelum mencoba lagi secara manual.`,
+    );
+  }
+  const dataLabel =
+    loading || error || feedPause
+      ? "UNVERIFIED"
+      : source === "exness"
+        ? "EXNESS · HISTORY"
+        : "DEMO";
   const { positions, history } = account;
   const riskBlocked = blocked(account, quotes);
   const floating = positions.reduce(
@@ -166,7 +183,7 @@ function App() {
     const controller = new AbortController();
     let refreshing = false;
     async function refresh() {
-      if (refreshing) return;
+      if (refreshing || paused.current) return;
       refreshing = true;
       await Promise.all(
         quoteSymbols.split(",").map(async (instrument) => {
@@ -180,6 +197,11 @@ function App() {
                 ]),
               },
             );
+            if (response.status === 429) {
+              const body = await response.json();
+              pauseFeed(body.retryAfter ?? 60);
+              throw Error("Rate limited");
+            }
             if (!response.ok) throw Error("Quote unavailable");
             const feed = await response.json();
             const last = feed.candles.at(-1)?.close;
@@ -189,7 +211,7 @@ function App() {
               feed.source === "simulation"
                 ? last * (1 + Math.sin(Date.now() / 15000) * 0.00015)
                 : last;
-            if (!controller.signal.aborted)
+            if (!controller.signal.aborted && !paused.current)
               setQuotes((q) => ({ ...q, [instrument]: mark }));
           } catch {
             if (!controller.signal.aborted) {
@@ -211,7 +233,7 @@ function App() {
       controller.abort();
       clearInterval(timer);
     };
-  }, [quoteSymbols]);
+  }, [quoteSymbols, feedEpoch]);
   const current = markets.find((m) => m.symbol === symbol)!;
   const price = quotes[symbol] ?? data.at(-1)?.close ?? current.price;
   useEffect(() => {
@@ -223,6 +245,13 @@ function App() {
       signal: controller.signal,
     })
       .then(async (r) => {
+        if (r.status === 429) {
+          const body = await r.json();
+          pauseFeed(body.retryAfter ?? 60);
+          throw Error(
+            "EXNESS rate limit: coba lagi secara manual setelah masa tunggu.",
+          );
+        }
         if (!r.ok) throw Error("Data market tidak tersedia. Periksa backend.");
         return r.json();
       })
@@ -237,7 +266,7 @@ function App() {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [symbol, interval]);
+  }, [symbol, interval, feedEpoch]);
   function order(orderSide = side) {
     const volume = Number(size);
     if (
@@ -402,6 +431,20 @@ function App() {
             </span>
           </div>
         </header>
+        {feedPause && (
+          <div className="feed-warning" role="alert">
+            {feedPause}
+            <button
+              onClick={() => {
+                paused.current = false;
+                setFeedPause("");
+                setFeedEpoch((n) => n + 1);
+              }}
+            >
+              Coba lagi
+            </button>
+          </div>
+        )}
         <section className="account">
           <div>
             <span className="eyebrow">WORKSPACE / OVERVIEW</span>
@@ -465,9 +508,7 @@ function App() {
                   </strong>
                   <small>{current.name}</small>
                 </div>
-                <span className="exchange">
-                  {source === "simulation" ? "DEMO FEED" : "EXNESS BRIDGE"}
-                </span>
+                <span className="exchange">{dataLabel}</span>
               </div>
               <div className="chart-actions">
                 <span className="green">
@@ -554,19 +595,18 @@ function App() {
               )}
               <span className="watermark">
                 NEXUS
-                <span>
-                  {" "}
-                  / {source === "simulation" ? "SIMULATED DATA" : "MARKET DATA"}
-                </span>
+                <span> / {dataLabel}</span>
               </span>
             </div>
             <div className="chart-footer">
-              <span>Rentang: 180 candles</span>
+              <span>Rentang: {data.length} candles</span>
               <span>
                 UTC ·{" "}
-                {source === "simulation"
-                  ? "Data simulasi, bukan harga live"
-                  : "Data melalui backend"}
+                {dataLabel === "UNVERIFIED"
+                  ? "Data belum terverifikasi"
+                  : source === "simulation"
+                    ? "DEMO · data simulasi, bukan harga live"
+                    : "EXNESS · candle history, bukan live ticks"}
               </span>
               <span className={error ? "red" : "green"}>
                 ●{" "}
@@ -686,7 +726,11 @@ function App() {
             </div>
             <button
               disabled={
-                loading || !!error || account.emergency || !quotes[symbol]
+                loading ||
+                !!error ||
+                !!feedPause ||
+                account.emergency ||
+                !quotes[symbol]
               }
               className={`submit-order ${side === "Sell" ? "sell-bg" : ""}`}
               onClick={() => order()}
@@ -738,7 +782,11 @@ function App() {
                 className={robot ? "robot-running" : ""}
                 disabled={
                   !robot &&
-                  (loading || !!error || riskBlocked || !quotes[symbol])
+                  (loading ||
+                    !!error ||
+                    !!feedPause ||
+                    riskBlocked ||
+                    !quotes[symbol])
                 }
                 onClick={() => setRobot(!robot)}
               >
@@ -775,7 +823,7 @@ function App() {
               <small>
                 {positions.some((p) => !quotes[p.symbol])
                   ? "Menunggu kuotasi · P&L parsial"
-                  : "Mark demo / bridge · refresh 5 detik"}
+                  : "Mark DEMO / EXNESS history · refresh 5 detik"}
               </small>
             </div>
             {storageError && (
@@ -935,7 +983,7 @@ function App() {
             <ShieldCheck size={12} /> Live trading dinonaktifkan
           </span>
           <span>
-            NEXUS TERMINAL <small>v1.0</small>
+            NEXUS TERMINAL <small>v2.0</small>
           </span>
         </footer>
       </div>

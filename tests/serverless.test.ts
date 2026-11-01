@@ -4,8 +4,8 @@ import handler from "../api/index";
 
 describe("Vercel Express entrypoint", () => {
   beforeEach(() => {
-    vi.stubEnv("EXNESS_DATA_URL", "");
-    vi.stubEnv("EXNESS_API_KEY", "");
+    vi.stubEnv("EXN_DISCOVERY_BASE_URL", "");
+    vi.stubEnv("EXN_API_KEY", "");
   });
   afterEach(() => vi.unstubAllEnvs());
 
@@ -42,7 +42,7 @@ describe("Vercel Express entrypoint", () => {
   });
 
   it("rejects every live order method even when backend credentials are configured", async () => {
-    vi.stubEnv("EXNESS_API_KEY", "test-backend-only");
+    vi.stubEnv("EXN_API_KEY", "test-backend-only");
     for (const method of [
       "get",
       "post",

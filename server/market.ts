@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { readConfig, readerFor } from "./exness.js";
 export const symbols = [
   "XAUUSD",
   "EURUSD",
@@ -38,41 +38,21 @@ export function candles(symbol: string, interval = 3600) {
     };
   });
 }
-export const candleSchema = z
-  .object({
-    time: z.number().int().positive(),
-    open: z.number().positive(),
-    high: z.number().positive(),
-    low: z.number().positive(),
-    close: z.number().positive(),
-  })
-  .refine(
-    (c) =>
-      c.high >= Math.max(c.open, c.close) &&
-      c.low <= Math.min(c.open, c.close) &&
-      c.low <= c.high,
-  );
 export async function market(symbol: string, interval: number) {
-  if (!process.env.EXNESS_DATA_URL)
-    return { source: "simulation", candles: candles(symbol, interval) };
-  const url = new URL(process.env.EXNESS_DATA_URL);
-  if (url.protocol !== "https:") throw Error("HTTPS required");
-  url.searchParams.set("symbol", symbol);
-  url.searchParams.set("interval", String(interval));
-  const response = await fetch(url, {
-    headers: process.env.EXNESS_API_KEY
-      ? { Authorization: `Bearer ${process.env.EXNESS_API_KEY}` }
-      : {},
-    signal: AbortSignal.timeout(8000),
-    redirect: "error",
-  });
-  if (!response.ok) throw Error("Provider unavailable");
-  const parsed = z
-    .object({ candles: z.array(candleSchema).min(2).max(5000) })
-    .parse(await response.json());
-  if (
-    parsed.candles.some((c, i) => i > 0 && c.time <= parsed.candles[i - 1].time)
-  )
-    throw Error("Invalid time order");
-  return { source: "exness-bridge", candles: parsed.candles };
+  const config = readConfig();
+  if (!config)
+    return {
+      source: "simulation",
+      label: "DEMO",
+      live: false,
+      kind: "synthetic",
+      candles: candles(symbol, interval),
+    };
+  return {
+    source: "exness",
+    label: "EXNESS",
+    live: false,
+    kind: "candle-history",
+    candles: await readerFor(config).candles(symbol, interval),
+  };
 }

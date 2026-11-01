@@ -1,5 +1,6 @@
 import express from "express";
 import { z } from "zod";
+import { ProviderError } from "./exness.js";
 import { market, symbols } from "./market.js";
 export const app = express();
 app.disable("x-powered-by");
@@ -28,7 +29,14 @@ app.get("/api/market", async (req, res) => {
     res
       .set("Cache-Control", "no-store")
       .json(await market(parsed.data.symbol, Number(parsed.data.interval)));
-  } catch {
+  } catch (error) {
+    if (error instanceof ProviderError) {
+      if (error.retryAfter) res.set("Retry-After", String(error.retryAfter));
+      res
+        .status(error.status)
+        .json({ error: error.code, retryAfter: error.retryAfter });
+      return;
+    }
     res.status(502).json({
       error: "Market provider unavailable. Check backend configuration.",
     });

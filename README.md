@@ -1,4 +1,4 @@
-# NEXUS Trading Terminal
+# NEXUS Trading Terminal V2
 
 Terminal market bergaya TradingView, dibangun dengan React, TypeScript, Vite, Lightweight Charts dan Express. **Semua eksekusi adalah simulasi. Tidak ada integrasi order broker atau live trading.**
 
@@ -19,13 +19,13 @@ Import `Nipzy12/bot-trading-terminal` pada Vercel dan pilih branch `feat/trading
 
 Frontend statis dilayani dari `dist/`. Semua `/api/*` diteruskan ke handler Express yang sama tanpa `app.listen()`, sebelum fallback SPA. File `server/index.ts` hanya untuk development lokal. Tidak perlu server Express terpisah, konfigurasi CORS, atau URL backend di frontend. Route API yang tidak dikenal mengembalikan JSON 404, bukan HTML frontend. Respons API memakai `Cache-Control: no-store`.
 
-**Demo tidak memerlukan environment variable apa pun.** Biarkan `EXNESS_DATA_URL` dan `EXNESS_API_KEY` tidak diatur untuk memakai candle simulasi. Jika bridge data terotorisasi sudah tersedia, tambahkan kedua variabel melalui Vercel Project Settings → Environment Variables pada environment yang sesuai (Preview/Production), lalu redeploy. Jangan gunakan prefix `VITE_`, menaruh rahasia di `vercel.json`, atau mengunggah `.env`. API key hanya dibaca oleh function backend. Timeout bridge 8 detik berada di bawah batas function 15 detik. Jika bridge yang dikonfigurasi gagal, API mengembalikan 502; tidak menyamarkannya sebagai demo.
+**Demo tidak memerlukan environment variable apa pun.** Jika salah satu dari empat `EXN_*` wajib belum diisi, API memakai DEMO tanpa request Exness. Jika konfigurasi lengkap tetapi salah/ditolak, API mengembalikan error terstruktur, tidak menyamarkannya sebagai data demo. Ikuti konfigurasi Android di bawah. Private key hanya berada di Environment Variables backend, tanpa prefix `VITE_`. Batas total satu alur Exness 6,5 detik, di bawah batas function 15 detik.
 
 Setelah deployment, periksa:
 
 - `/` menampilkan terminal dan chart demo.
 - `GET /api/health` → 200, `{"status":"ok","execution":"simulation","liveTrading":false}`.
-- `GET /api/market?symbol=XAUUSD&interval=3600` → 200 dengan `source: "simulation"` dan 180 candle tanpa konfigurasi bridge.
+- `GET /api/market?symbol=XAUUSD&interval=3600` → 200 dengan `source: "simulation"` dan 180 candle tanpa konfigurasi Exness.
 - `POST /api/orders` → 403, `Live trading is disabled`.
 - `/api/unknown` → JSON 404.
 
@@ -41,21 +41,61 @@ Robot tetap berjalan di browser selama tab terbuka; tidak dijalankan sebagai pro
 - Floating P&L, realized P&L, saldo awal $10.000 dan equity. Ukuran kontrak simulasi: XAUUSD 100 oz/lot, EURUSD/GBPUSD/USDJPY 100.000 unit/lot, BTCUSD/ETHUSD 1 unit/lot. P&L USDJPY dikonversi ke USD pada harga exit/mark. Ini asumsi demo, bukan spesifikasi kontrak akun Exness. Tidak menghitung spread, swap, komisi atau margin.
 - Pengujian kontrak backend dan CI GitHub Actions.
 
-## Data Exness melalui backend
+## Exness Trader API resmi: read-only
 
-Secara default data candle sintetis; snapshot watchlist juga demo. Aplikasi **tidak mengklaim memakai endpoint REST Exness publik yang belum diverifikasi**. Integrasi memerlukan bridge data resmi/terotorisasi untuk akun Exness Anda (misalnya bridge MT5 yang Anda operasikan). Tanpa akses endpoint dan kredensial, koneksi Exness nyata belum dapat diverifikasi.
+Adapter mengikuti [OpenAPI Trader API v1.0.2](https://www.exness-api.com/openapi/trading.public.yaml), [host discovery](https://www.exness-api.com/trading/get-started/access-point-host-discovery), [request signing](https://www.exness-api.com/authentication/request-signing), [candle history](https://www.exness-api.com/reference/trading/get-candle-history), dan [limits](https://www.exness-api.com/trading/guides/api-configuration-and-limits). Kontrak diperiksa 2 November 2026. Implementasi divalidasi dengan mock; belum terverifikasi terhadap akun Exness nyata tanpa kredensial yang sah.
 
-Konfigurasikan `EXNESS_DATA_URL` dan opsional `EXNESS_API_KEY` hanya di lingkungan backend/secret manager. URL harus HTTPS. Untuk pengembangan lokal, salin `.env.example` ke `.env` lalu gunakan `node --env-file=.env --import tsx server/index.ts` pada terminal terpisah dan `npx vite` pada terminal lain. `npm run dev` menggunakan variabel lingkungan yang sudah diekspor, tidak otomatis membaca `.env` ke Express. Jangan memakai prefix `VITE_` untuk rahasia.
+Alur backend:
 
-Backend mengirim `GET <EXNESS_DATA_URL>?symbol=XAUUSD&interval=3600` dengan `Authorization: Bearer <EXNESS_API_KEY>` bila diatur. Bridge harus mengembalikan:
+1. Ambil Gateway **yang benar dari DNS widget Key Management**, bukan host contoh atau URL Access Point yang ditebak.
+2. Signed GET `/v1/trading/access-point?account_id=…`, validasi URL HTTPS origin tanpa userinfo/path/query/port serta account ID yang dikembalikan. ID dipertahankan sebagai string uint64 agar tidak kehilangan presisi.
+3. Gunakan `access_point` untuk signed GET `/v1/configuration/accounts/{account_id}/limits`. Cache AP pada warm instance, refresh konfigurasi limits setiap 5 menit dan setelah rate limit; HTTP 404 menginvalidasi AP untuk discovery pada permintaan berikutnya.
+4. Signed GET `/v1/market-data/accounts/{account_id}/candles?instrument=…&price_type=bid&timeframe=…&from=…&count=…`. `from` berupa ISO UTC dan inklusif. Ambil sampai 180 candle tertutup, dibatasi `max_candles_per_request` dan constraint rentang/umur yang dikembalikan limits. Jika batas candle tidak tersedia, hentikan dengan error; tidak menganggap quota tidak terbatas. Tidak memakai `to` bersamaan dengan `count`.
+5. Validasi bentuk payload, angka OHLC positif/finite dan konsisten, timestamp ISO dengan offset, urutan waktu unik menaik, rentang request dan jumlah hasil. Normalisasi timestamp ke Unix detik untuk chart. Respons kosong/rusak ditolak.
 
-```json
-{"candles":[{"time":1730000000,"open":2740,"high":2744,"low":2738,"close":2742},{"time":1730003600,"open":2742,"high":2746,"low":2741,"close":2745}]}
-```
+| UI / interval detik | Exness timeframe |
+| --- | --- |
+| 5m / 300 | M5 |
+| 15m / 900 | M15 |
+| 1h / 3600 | H1 |
+| 4h / 14400 | H4 |
+| 1D / 86400 | D1 |
 
-Timestamp Unix dalam detik, urut naik, minimal dua candle, maksimal 5000. OHLC harus positif dan konsisten. Backend memvalidasi payload, menolak redirect, menerapkan timeout 8 detik, dan mengembalikan error generik tanpa rahasia. Tidak ada fallback diam-diam ke demo ketika upstream gagal. Chart diambil kembali saat instrumen/timeframe berubah. Kuotasi untuk instrumen terpilih dan semua posisi terbuka dipolling setiap 5 detik. Pada sumber simulasi, mark memiliki variasi sinus kecil untuk mendemonstrasikan P&L; ini bukan harga live. Watchlist tetap snapshot demo walaupun bridge aktif.
+Tanda tangan memakai Ed25519 melalui `node:crypto`: JSON UTF-8 ditandatangani sebagai bytes yang sama persis dengan payload `EXN-DATA`; `EXN-DATA` dan `EXN-SIGN` base64url tanpa padding. Header `EXN-API-KEY`, `EXN-IDEMPOTENCY-KEY` (wajib, string kosong untuk GET), `EXN-TIMESTAMP` (milidetik), `EXN-SIGN-VERSION: 1` dikirim pada setiap request dengan timestamp/signature baru. `path` meliputi query tepat sebagaimana dikirim; hash body adalah SHA-256 bytes kosong. Tidak mengikuti redirect agar header autentikasi tidak diteruskan ke tujuan lain.
 
-API: `GET /api/health`, `GET /api/market?symbol=XAUUSD&interval=3600`. Semua metode `/api/orders` ditolak (403). API key tidak pernah dikirim ke frontend. `.env*`, log, build dan dependensi diabaikan Git.
+### Label dan paper trading
+
+`/api/market` mengembalikan `source: simulation`, `label: DEMO`, `kind: synthetic`, `live: false` tanpa konfigurasi lengkap. Respons Exness yang lolos validasi memakai `source: exness`, `label: EXNESS`, `kind: candle-history`, `live: false`. Label EXNESS menunjukkan **asal candle history**, bukan koneksi ticks live atau akun broker live. UI menampilkan `UNVERIFIED` saat chart belum tersedia/gagal. Tidak ada WebSocket/ticks live dan tidak ada eksekusi broker.
+
+Chart dimuat saat instrumen/timeframe berubah. Mark paper untuk instrumen terpilih dan posisi terbuka dipolling setiap 5 detik dari candle M5 terakhir yang tertutup; mark Exness ini **bukan harga eksekusi live**. Pada DEMO saja, mark diberi variasi sinus kecil untuk memperlihatkan floating P&L. Watchlist/ticker tetap snapshot **DEMO**, termasuk ketika chart memakai Exness. Paper trading, localStorage, batas risiko, SL/TP simulasi dan emergency tetap berlaku.
+
+### Rate limit dan error
+
+- Gunakan rate window global dan per-operation dari limits untuk accounting warm instance. Cache candle 5 detik dan gabungkan request identik yang sedang berjalan. Jangan hardcode batas quota provider.
+- HTTP 429 atau public error `REQUEST_RATE_LIMIT` (3015) tidak di-retry otomatis. Teruskan HTTP 429, header `Retry-After`, JSON `{error:"EXNESS_RATE_LIMIT",retryAfter:…}`. Baca header detik/tanggal atau body `retry_after`; bila provider tidak memberi petunjuk, cooldown defensif 60 detik (ini bukan nilai quota Exness). Frontend menghentikan polling, menghapus mark, menghentikan robot dan meminta **Coba lagi** manual setelah masa tunggu.
+- Error autentikasi → 502 `EXNESS_AUTH`; konfigurasi key/host tidak valid → 502 `EXNESS_CONFIGURATION`; data tidak valid → 502 `EXNESS_INVALID_RESPONSE`; jaringan/timeout → 502 `EXNESS_NETWORK`; kegagalan provider lain → 502 `EXNESS_UPSTREAM`. Tidak meneruskan diagnostic text upstream, account ID, private key atau signed headers ke browser/log.
+- Cache/accounting ada **per warm instance**, bukan quota global lintas instance/region Vercel. Provider tetap otoritatif; 429 tetap ditangani. Untuk banyak pengguna, tambahkan koordinasi quota terpusat dan kontrol akses sebelum membuka penggunaan luas. Backend ini bukan proxy umum: akun/host hanya dari environment, instrumen dan timeframe dibatasi allowlist.
+
+### Konfigurasi hanya melalui Android
+
+1. Di Chrome Android (aktifkan **Situs desktop** bila diperlukan), buka Personal Area/portal Exness → **Key Management**. Pastikan produk Trader API tersedia bagi akun Anda. Pilih akun dan izin **Trading read access saja**, tanpa izin mutasi/order. Bila fitur tidak tersedia, konfirmasi akses melalui Exness; jangan mengambil key dari layanan tidak resmi.
+2. Buat key melalui flow resmi Exness, catat identifier API key, private signing key, account ID, dan Gateway dari DNS widget. Untuk flow Exness-generated, private key berupa **128 karakter hex (64 bytes: seed + public key)**. Adapter juga mendukung private key Ed25519 PKCS#8 PEM milik Anda, termasuk newline literal `\n`; public half hex dicek terhadap seed. Tidak perlu membuat key baru jika sudah punya key read-only yang valid.
+3. Buka Vercel Dashboard → project **bot-trading-terminal** → **Settings → Environment Variables**. Tambahkan nilai berikut langsung di dashboard, **jangan kirim lewat chat, screenshot, GitHub atau localStorage**:
+
+| Variable backend | Isi |
+| --- | --- |
+| `EXN_API_KEY` | Identifier API key dari Key Management |
+| `EXN_PRIVATE_KEY` | Private signing key hex 128 karakter atau PKCS#8 PEM |
+| `EXN_ACCOUNT_ID` | ID akun desimal, bukan nomor JavaScript |
+| `EXN_DISCOVERY_BASE_URL` | HTTPS Gateway origin dari DNS widget |
+
+4. Pilih environment yang sesuai deployment (**Production** untuk domain produksi, **Preview** untuk preview), simpan sebagai **Secret** jika tersedia. Jangan memakai nama `VITE_*`. Tidak perlu mengisi Access Point secara manual atau `EXN_API_BASE_URL`; adapter selalu melakukan discovery. Jangan menaruh credential di `vercel.json`.
+5. Redeploy branch `feat/trading-terminal` dari tab Deployments. Buka `/api/health` (hanya kesehatan aplikasi dan execution simulasi), lalu `/api/market?symbol=XAUUSD&interval=3600`. Hanya setelah respons 200 dengan `label: EXNESS` dan candle valid, asal data Exness terverifikasi untuk request tersebut; ini tetap candle history, bukan ticks live. 401/403 upstream: cek expiry, read scope, akun dan pembatasan IP melalui portal. Jangan mengubah key menjadi memiliki izin order untuk mengatasi error data.
+6. Jika belum siap, biarkan empat nilai belum dikonfigurasi untuk DEMO. Konfigurasi parsial juga DEMO; konfigurasi lengkap tetapi invalid menghasilkan error. Variabel bridge lama `EXNESS_DATA_URL`/`EXNESS_API_KEY` **tidak lagi dipakai**; hapus manual dari dashboard jika masih ada, tanpa mengubahnya menjadi `VITE_*`.
+
+`.env.example` hanya berisi nama variabel kosong. Semua `.env*` aktual diabaikan Git. Tidak ada kode signing, credential, atau import `server/` dalam frontend. Pengujian memakai pasangan key sementara yang dibuat di memori, bukan key produksi. `npm test` mencakup adapter mock dan kontrol paper trading; `npm run build` memeriksa TypeScript dan membuat frontend produksi.
+
+API lokal tetap `GET /api/health`, `GET /api/market?symbol=XAUUSD&interval=3600`. Semua metode `/api/orders` ditolak 403 dan rute API lain JSON 404. Robot selalu berhenti saat halaman dibuka.
 
 ## Batasan
 

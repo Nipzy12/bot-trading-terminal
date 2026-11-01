@@ -1,10 +1,18 @@
-import { afterEach, describe, it, expect, vi } from "vitest";
+import { beforeEach, afterEach, describe, it, expect, vi } from "vitest";
 import request from "supertest";
 import { app } from "../server/app";
-import { candles, market } from "../server/market";
+import { candles } from "../server/market";
+beforeEach(() => {
+  for (const name of [
+    "EXN_API_KEY",
+    "EXN_PRIVATE_KEY",
+    "EXN_ACCOUNT_ID",
+    "EXN_DISCOVERY_BASE_URL",
+  ])
+    vi.stubEnv(name, "");
+});
 afterEach(() => {
-  delete process.env.EXNESS_DATA_URL;
-  delete process.env.EXNESS_API_KEY;
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 describe("safe market backend", () => {
@@ -42,53 +50,16 @@ describe("safe market backend", () => {
       (await request(app).get("/api/market?symbol=XAUUSD&interval=1")).status,
     ).toBe(400);
   });
-  it("uses server-side auth without returning credentials", async () => {
-    process.env.EXNESS_DATA_URL = "https://bridge.example/candles";
-    process.env.EXNESS_API_KEY = "test-only-secret";
-    const fetcher = vi
-      .fn()
-      .mockResolvedValue({
-        ok: true,
-        json: async () => ({ candles: candles("EURUSD") }),
-      });
-    vi.stubGlobal("fetch", fetcher);
-    const r = await request(app).get("/api/market?symbol=EURUSD");
-    expect(r.body.source).toBe("exness-bridge");
-    expect(fetcher.mock.calls[0][1].headers.Authorization).toBe(
-      "Bearer test-only-secret",
-    );
-    expect(JSON.stringify(r.body)).not.toContain("test-only-secret");
-  });
-  it("fails closed on malformed data and sanitizes errors", async () => {
-    process.env.EXNESS_DATA_URL = "https://bridge.example";
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValue({
-          ok: true,
-          json: async () => ({ candles: [{ time: 1, open: -1 }] }),
-        }),
-    );
+  it("falls back to labeled demo without complete credentials", async () => {
+    vi.stubEnv("EXN_API_KEY", "incomplete-test-key");
+    const transport = vi.fn();
+    vi.stubGlobal("fetch", transport);
     const r = await request(app).get("/api/market?symbol=XAUUSD");
-    expect(r.status).toBe(502);
-    expect(r.body.error).toBe(
-      "Market provider unavailable. Check backend configuration.",
-    );
-  });
-  it("rejects insecure upstream and unordered candles", async () => {
-    process.env.EXNESS_DATA_URL = "http://bridge.example";
-    await expect(market("XAUUSD", 3600)).rejects.toThrow("HTTPS");
-    process.env.EXNESS_DATA_URL = "https://bridge.example";
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValue({
-          ok: true,
-          json: async () => ({ candles: candles("XAUUSD").reverse() }),
-        }),
-    );
-    await expect(market("XAUUSD", 3600)).rejects.toThrow("Invalid time order");
+    expect(r.body).toMatchObject({
+      source: "simulation",
+      label: "DEMO",
+      live: false,
+    });
+    expect(transport).not.toHaveBeenCalled();
   });
 });

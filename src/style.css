@@ -1495,3 +1495,23 @@ main {
     display: initial;
   }
 }
+.feed-warning {
+  margin: 15px 27px;
+  padding: 14px;
+  border: 1px solid #856a36;
+  background: #332b1c;
+  color: #edd08d;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+}
+.feed-warning button {
+  padding: 10px;
+  border: 1px solid #ab914e;
+  border-radius: 5px;
+  min-height: 44px;
+  white-space: nowrap;
+}
