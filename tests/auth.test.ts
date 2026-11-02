@@ -3,7 +3,7 @@ import { PGlite } from "@electric-sql/pglite";
 import { Pool } from "pg";
 import { readFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
-import { createAuth } from "../server/auth";
+import { createAuth, cookieOnlyResponse } from "../server/auth";
 it("uses Better Auth real password hashing, secure session cookie, DB session expiry and logout revocation", async () => {
   const db = new PGlite();
   await db.exec(await readFile("migrations/001_accounts.sql", "utf8"));
@@ -26,21 +26,24 @@ it("uses Better Auth real password hashing, secure session cookie, DB session ex
   } as unknown as Pool;
   const auth = createAuth(pool);
   try {
-    const signup = await auth.handler(
-      new Request("https://terminal.test/api/auth/sign-up/email", {
-        method: "POST",
-        headers: {
-          origin: "https://terminal.test",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          name: "Synthetic Tester",
-          email: "test@example.test",
-          password: "synthetic-test-password-12345",
+    const signup = await cookieOnlyResponse(
+      await auth.handler(
+        new Request("https://terminal.test/api/auth/sign-up/email", {
+          method: "POST",
+          headers: {
+            origin: "https://terminal.test",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            name: "Synthetic Tester",
+            email: "test@example.test",
+            password: "synthetic-test-password-12345",
+          }),
         }),
-      }),
+      ),
     );
     expect(signup.status).toBe(200);
+    expect(await signup.clone().json()).not.toHaveProperty("token");
     const cookies = signup.headers.getSetCookie();
     expect(
       cookies.some(

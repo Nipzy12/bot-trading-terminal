@@ -1,6 +1,6 @@
 import express from "express";
 import { toNodeHandler } from "better-auth/node";
-import { auth, configured, origin } from "./auth.js";
+import { auth, configured, origin, cookieOnlyResponse } from "./auth.js";
 import { database, takeRate } from "./database.js";
 import { accountRouter } from "./accounts.js";
 import { createHmac } from "node:crypto";
@@ -40,7 +40,21 @@ app.all("/api/auth/{*path}", async (req, res) => {
       res.set("Retry-After", "60").status(429).json({ error: "RATE_LIMITED" });
       return;
     }
-    await toNodeHandler(auth())(req, res);
+    if (
+      req.method !== "POST" ||
+      ![
+        "/api/auth/sign-in/email",
+        "/api/auth/sign-up/email",
+        "/api/auth/sign-out",
+      ].includes(req.path)
+    ) {
+      res.status(404).json({ error: "NOT_FOUND" });
+      return;
+    }
+    await toNodeHandler({
+      handler: async (request: Request) =>
+        cookieOnlyResponse(await auth().handler(request)),
+    })(req, res);
   } catch {
     res.status(503).json({ error: "AUTH_SERVICE_UNAVAILABLE" });
   }

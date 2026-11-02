@@ -4,7 +4,7 @@ No live broker order code exists. Exness connections use GET-only discovery, con
 
 ## Deployment prerequisites
 
-Private management is unavailable until PostgreSQL, the exact trusted APP_ORIGIN, BETTER_AUTH_SECRET and CREDENTIALS_ENCRYPTION_KEY are configured. Database outages, missing migration tables, rate-store failures and vault failures deny private access. There is no production test-user header, mock login, memory database fallback or public credential read-back API. Tests inject dependencies only through an internal router factory.
+Private management is unavailable until PostgreSQL, the exact trusted APP_ORIGIN, BETTER_AUTH_SECRET and CREDENTIALS_ENCRYPTION_KEY are configured. Database outages, missing migration tables, rate-store failures and vault failures deny private access. There is no production test-user header, mock login, memory database fallback or public credential read-back API. Only the three email signup/signin/signout POST auth routes are exposed. Bearer session tokens are removed from JSON; authentication travels in HttpOnly cookies, and session metadata is available only through the protected account endpoint. Tests inject dependencies only through an internal router factory.
 
 Use the private `nexus_private` schema on a trusted database, with PUBLIC access revoked. Do not grant browser/anonymous Data API roles access. Migrations require a schema-owning backend role. Use provider-managed TLS and backups, keep the DB connection and secrets out of logs, and keep Preview credentials separate. The encryption key must not be stored in the database.
 

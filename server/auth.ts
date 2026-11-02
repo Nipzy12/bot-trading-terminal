@@ -59,3 +59,21 @@ export function auth() {
   if (!configured()) throw Error("AUTH_UNAVAILABLE");
   return (instance ??= createAuth());
 }
+
+// The browser uses HttpOnly cookies only. Do not echo bearer session tokens in JSON.
+export async function cookieOnlyResponse(response: Response) {
+  if (!response.headers.get("content-type")?.includes("application/json"))
+    return response;
+  const data = await response.json();
+  if (data && typeof data === "object") {
+    delete data.token;
+    if (data.session && typeof data.session === "object")
+      delete data.session.token;
+  }
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  return new Response(JSON.stringify(data), {
+    status: response.status,
+    headers,
+  });
+}
