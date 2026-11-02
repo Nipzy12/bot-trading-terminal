@@ -288,7 +288,7 @@ describe("Exness read-only adapter contract", () => {
     ).rejects.toThrow("EXNESS_NETWORK");
     expect(transport).toHaveBeenCalledTimes(1);
   });
-  it("labels successful API candle history as EXNESS without a live claim or signing fields", async () => {
+  it("public DEMO never exposes global Exness credentials or account data", async () => {
     for (const [key, value] of Object.entries({
       EXN_API_KEY: config.apiKey,
       EXN_PRIVATE_KEY: pem,
@@ -300,12 +300,12 @@ describe("Exness read-only adapter contract", () => {
     const r = await request(app).get("/api/market?symbol=XAUUSD&interval=900");
     expect(r.status).toBe(200);
     expect(r.body).toMatchObject({
-      label: "EXNESS",
-      source: "exness",
-      kind: "candle-history",
+      label: "DEMO",
+      source: "simulation",
+      kind: "synthetic",
       live: false,
     });
-    expect(r.body.candles).toHaveLength(2);
+    expect(r.body.candles).toHaveLength(180);
     expect(JSON.stringify(r.body)).not.toContain("EXN-SIGN");
     expect(JSON.stringify(r.body)).not.toContain(config.apiKey);
   });
@@ -356,7 +356,7 @@ describe("Exness read-only adapter contract", () => {
       status: 429,
     });
   });
-  it("API returns rate-limit contract without leaking credentials and never falls back to demo on configured errors", async () => {
+  it("public demo does not call a credentialed provider even when credentials exist", async () => {
     for (const [key, value] of Object.entries({
       EXN_API_KEY: config.apiKey,
       EXN_PRIVATE_KEY: raw,
@@ -364,17 +364,11 @@ describe("Exness read-only adapter contract", () => {
       EXN_DISCOVERY_BASE_URL: config.gateway,
     }))
       vi.stubEnv(key, value);
-    vi.stubGlobal(
-      "fetch",
-      vi
-        .fn()
-        .mockResolvedValue(Response.json({ retry_after: 20 }, { status: 429 })),
-    );
+    const transport = vi.fn();
+    vi.stubGlobal("fetch", transport);
     const r = await request(app).get("/api/market?symbol=XAUUSD");
-    expect(r.status).toBe(429);
-    expect(r.headers["retry-after"]).toBe("20");
-    expect(r.body).toEqual({ error: "EXNESS_RATE_LIMIT", retryAfter: 20 });
-    expect(JSON.stringify(r.body)).not.toContain(config.apiKey);
-    expect(JSON.stringify(r.body)).not.toContain(raw);
+    expect(r.status).toBe(200);
+    expect(r.body.label).toBe("DEMO");
+    expect(transport).not.toHaveBeenCalled();
   });
 });

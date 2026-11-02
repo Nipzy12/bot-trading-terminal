@@ -27,6 +27,13 @@ import {
   X,
 } from "lucide-react";
 import "./style.css";
+const AccountManagement = React.lazy(() =>
+  import("./AccountManagement").then((m) => ({ default: m.AccountManagement })),
+);
+const marketPath =
+  new URLSearchParams(location.search).get("feed") === "exness"
+    ? "/api/account/market"
+    : "/api/market";
 import {
   STORAGE_KEY,
   fresh,
@@ -189,7 +196,7 @@ function App() {
         quoteSymbols.split(",").map(async (instrument) => {
           try {
             const response = await fetch(
-              `/api/market?symbol=${instrument}&interval=300`,
+              `${marketPath}?symbol=${instrument}&interval=300`,
               {
                 signal: AbortSignal.any([
                   controller.signal,
@@ -241,7 +248,7 @@ function App() {
     setLoading(true);
     setError("");
     setData([]);
-    fetch(`/api/market?symbol=${symbol}&interval=${interval}`, {
+    fetch(`${marketPath}?symbol=${symbol}&interval=${interval}`, {
       signal: controller.signal,
     })
       .then(async (r) => {
@@ -407,6 +414,7 @@ function App() {
               Terminal
             </a>
             <a href="#markets">Markets</a>
+            <a href="/accounts">Accounts</a>
             <a href="#robot">
               Trading bot <span className="new">NEW</span>
             </a>
@@ -983,7 +991,7 @@ function App() {
             <ShieldCheck size={12} /> Live trading dinonaktifkan
           </span>
           <span>
-            NEXUS TERMINAL <small>v2.0</small>
+            NEXUS TERMINAL <small>v3.0</small>
           </span>
         </footer>
       </div>
@@ -1000,6 +1008,8 @@ function App() {
 }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <React.Suspense fallback={<p role="status">Memuat workspace…</p>}>
+      {location.pathname === "/accounts" ? <AccountManagement /> : <App />}
+    </React.Suspense>
   </React.StrictMode>,
 );

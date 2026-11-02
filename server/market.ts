@@ -1,4 +1,3 @@
-import { readConfig, readerFor } from "./exness.js";
 export const symbols = [
   "XAUUSD",
   "EURUSD",
@@ -38,21 +37,13 @@ export function candles(symbol: string, interval = 3600) {
     };
   });
 }
+// The public terminal never reads a global credential or another user's account.
 export async function market(symbol: string, interval: number) {
-  const config = readConfig();
-  if (!config)
-    return {
-      source: "simulation",
-      label: "DEMO",
-      live: false,
-      kind: "synthetic",
-      candles: candles(symbol, interval),
-    };
   return {
-    source: "exness",
-    label: "EXNESS",
+    source: "simulation",
+    label: "DEMO",
     live: false,
-    kind: "candle-history",
-    candles: await readerFor(config).candles(symbol, interval),
+    kind: "synthetic",
+    candles: candles(symbol, interval),
   };
 }

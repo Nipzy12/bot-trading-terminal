@@ -1,4 +1,9 @@
 import express from "express";
+import { toNodeHandler } from "better-auth/node";
+import { auth, configured, origin } from "./auth.js";
+import { database, takeRate } from "./database.js";
+import { accountRouter } from "./accounts.js";
+import { createHmac } from "node:crypto";
 import { z } from "zod";
 import { ProviderError } from "./exness.js";
 import { market, symbols } from "./market.js";
@@ -8,7 +13,40 @@ app.use("/api", (_req, res, next) => {
   res.set("Cache-Control", "no-store");
   next();
 });
+app.all("/api/auth/{*path}", async (req, res) => {
+  try {
+    if (!configured()) {
+      res.status(503).json({ error: "ACCOUNT_SETUP_REQUIRED" });
+      return;
+    }
+    if (
+      req.method !== "GET" &&
+      (req.get("origin") !== origin() ||
+        req.get("sec-fetch-site") === "cross-site")
+    ) {
+      res.status(403).json({ error: "CSRF_REJECTED" });
+      return;
+    }
+    const address =
+      (process.env.VERCEL === "1"
+        ? req.get("x-vercel-forwarded-for")
+        : undefined) ??
+      req.socket.remoteAddress ??
+      "unknown";
+    const key = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
+      .update(address)
+      .digest("hex");
+    if (!(await takeRate(database(), `auth:${key}`, 20, 60))) {
+      res.set("Retry-After", "60").status(429).json({ error: "RATE_LIMITED" });
+      return;
+    }
+    await toNodeHandler(auth())(req, res);
+  } catch {
+    res.status(503).json({ error: "AUTH_SERVICE_UNAVAILABLE" });
+  }
+});
 app.use(express.json({ limit: "8kb" }));
+app.use("/api/account", accountRouter());
 app.get("/api/health", (_req, res) =>
   res.json({ status: "ok", execution: "simulation", liveTrading: false }),
 );
@@ -51,3 +89,14 @@ app.all("/api/orders", (_req, res) =>
 app.use("/api", (_req, res) => {
   res.status(404).json({ error: "API endpoint not found" });
 });
+
+app.use(
+  (
+    _error: unknown,
+    _req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    res.status(400).json({ error: "INVALID_REQUEST" });
+  },
+);

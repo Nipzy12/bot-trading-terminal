@@ -1515,3 +1515,155 @@ main {
   min-height: 44px;
   white-space: nowrap;
 }
+.account-page {
+  display: block;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 24px;
+}
+.account-page > header {
+  padding: 0;
+  gap: 20px;
+  background: none;
+  justify-content: space-between;
+}
+.account-intro {
+  padding: 32px 0 20px;
+}
+.account-page p {
+  color: #91a0b8;
+  line-height: 1.7;
+  font-size: 13px;
+}
+.account-box {
+  padding: 24px;
+  margin-bottom: 18px;
+}
+.account-box h2 {
+  font-size: 17px;
+}
+.account-page form {
+  display: grid;
+  gap: 18px;
+  margin: 24px 0;
+}
+.account-page label {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 13px;
+}
+.account-page input,
+.account-page textarea {
+  font: inherit;
+  font-size: 16px;
+  color: #dee7f8;
+  background: #0b1019;
+  border: 1px solid #3b4a64;
+  border-radius: 6px;
+  padding: 12px;
+  width: 100%;
+  min-height: 46px;
+}
+.account-page textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+.account-page button,
+.private-terminal {
+  display: inline-block;
+  min-height: 44px;
+  border: 1px solid #455a7e;
+  background: #24334f;
+  border-radius: 5px;
+  padding: 12px 16px;
+  font-size: 12px;
+}
+.account-page .primary {
+  background: #48d0ac;
+  color: #082b23;
+  font-weight: 600;
+}
+.account-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 15px;
+}
+.connection-card {
+  padding: 20px 0;
+  border-bottom: 1px solid #2e3b50;
+}
+.connection-card h3 {
+  margin-top: 0;
+}
+.connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.account-page .danger {
+  border-color: #91465c;
+  color: #ff9bac;
+  background: #3a202b;
+}
+.account-page .read-only-confirm {
+  flex-direction: row;
+  align-items: center;
+  line-height: 1.6;
+}
+.read-only-confirm input {
+  width: 22px;
+  height: 22px;
+  min-height: 22px;
+  flex-shrink: 0;
+}
+.account-message {
+  padding: 16px;
+  border: 1px solid #4d648c;
+  border-radius: 5px;
+  background: #1b2942;
+  margin-bottom: 18px;
+}
+.private-terminal {
+  margin-top: 20px;
+}
+.account-footnote {
+  font-size: 11px !important;
+}
+@media (max-width: 700px) {
+  .account-page {
+    padding: 16px;
+  }
+  .account-box {
+    padding: 18px;
+  }
+  .account-heading {
+    align-items: flex-start;
+  }
+  .connection-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .connection-actions .danger {
+    grid-column: 1 / -1;
+  }
+  .account-page > header .logo span {
+    display: block;
+  }
+  .account-page > header > a:last-child {
+    font-size: 12px;
+  }
+  .account-intro h1 {
+    font-size: 24px;
+  }
+}
+@media (max-width: 700px) {
+  .workspace header nav a[href="#markets"] {
+    display: none;
+  }
+  .workspace header nav a[href="/accounts"] {
+    font-size: 11px;
+  }
+}

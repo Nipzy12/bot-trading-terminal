@@ -97,17 +97,6 @@ export type Config = {
   accountId: string;
   gateway: string;
 };
-export function readConfig(): Config | null {
-  const [apiKey, privateKey, accountId, gateway] = [
-    "EXN_API_KEY",
-    "EXN_PRIVATE_KEY",
-    "EXN_ACCOUNT_ID",
-    "EXN_DISCOVERY_BASE_URL",
-  ].map((k) => process.env[k]?.trim() ?? "");
-  return apiKey && privateKey && accountId && gateway
-    ? { apiKey, privateKey, accountId, gateway }
-    : null;
-}
 const rate = z.object({
   limit: z.number().int().positive(),
   window_seconds: z.number().int().positive(),
@@ -191,6 +180,10 @@ export class ExnessReader {
     private config: Config,
     private transport: typeof fetch = (...args) => fetch(...args),
     private now = () => Date.now(),
+    private guard?: (
+      operation: string,
+      rules: { limit: number; window_seconds: number; scope: string }[],
+    ) => Promise<void>,
   ) {
     try {
       if (
@@ -241,6 +234,20 @@ export class ExnessReader {
             ),
           );
       }
+    }
+    if (this.guard) {
+      const method = this.limits?.methods.find(
+        (m) => m.api_operation_id === operation,
+      );
+      const rules = [
+        {
+          scope: "global",
+          limit: this.limits?.global_account_rate.limit ?? 10,
+          window_seconds: this.limits?.global_account_rate.window_seconds ?? 60,
+        },
+      ];
+      if (method) rules.push({ scope: operation, ...method.rate_limit });
+      await this.guard(operation, rules);
     }
     this.usage = this.usage.filter((u) => now - u.at < 86400000);
     this.usage.push({ at: now, operation });
@@ -403,13 +410,4 @@ export class ExnessReader {
       this.pending.delete(cacheKey);
     }
   }
-}
-let current: { fingerprint: string; reader: ExnessReader } | undefined;
-export function readerFor(config: Config) {
-  const fingerprint = createHash("sha256")
-    .update(JSON.stringify(config))
-    .digest("hex");
-  if (current?.fingerprint !== fingerprint)
-    current = { fingerprint, reader: new ExnessReader(config) };
-  return current.reader;
 }
