@@ -78,7 +78,8 @@ function fixture(failAt?: string, fail?: () => Promise<Response>) {
         });
       expect(u.searchParams.get("instrument")).toBe("XAUUSD");
       expect(u.searchParams.get("timeframe")).toBe("H1");
-      expect(u.searchParams.get("to")).toBeNull();
+      expect(u.searchParams.get("count")).toBeNull();
+      expect(u.searchParams.get("to")).not.toBeNull();
       expect(u.searchParams.get("price_type")).toBe("bid");
       const start = Date.parse(u.searchParams.get("from")!);
       return Response.json({

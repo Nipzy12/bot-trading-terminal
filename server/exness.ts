@@ -12,6 +12,7 @@ import {
   instrumentNames,
   selectInstrument,
   CandleHistoryError,
+  closedHistoryWindow,
 } from "./candle-history.js";
 export { normalizeHistory } from "./candle-history.js";
 export const timeframes: Record<number, string> = {
@@ -343,7 +344,7 @@ export class ExnessReader {
     if (!limits.success) throw new ProviderError("EXNESS_INVALID_RESPONSE");
     this.limits = limits.data.limits.rest;
   }
-  private candleCount(interval: number) {
+  private historyWindow(interval: number) {
     const method = this.limits!.methods.find(
       (m) =>
         m.api_operation_id === "getCandleHistory" &&
@@ -353,23 +354,9 @@ export class ExnessReader {
     const shape = constraints.safeParse(method?.limits);
     if (!method || !shape.success)
       throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
-    let count = Math.min(180, shape.data.max_candles_per_request);
-    if (shape.data.history_range_days)
-      count = Math.min(
-        count,
-        Math.floor((shape.data.history_range_days * 86400) / interval),
-      );
-    if (shape.data.history_age_days) {
-      const age =
-        this.now() / 1000 - Math.floor(this.now() / 1000 / interval) * interval;
-      count = Math.min(
-        count,
-        Math.floor((shape.data.history_age_days * 86400 - age) / interval),
-      );
-    }
-    if (count < 1) throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
-    return count;
+    return closedHistoryWindow(this.now() / 1000, interval, shape.data);
   }
+
   private async accountInstrument(symbol: string, signal: AbortSignal) {
     if (!this.instruments || this.now() - this.instruments.at >= 300000) {
       const names = instrumentNames(
@@ -387,16 +374,13 @@ export class ExnessReader {
   private async history(symbol: string, interval: number, signal: AbortSignal) {
     try {
       const instrument = await this.accountInstrument(symbol, signal);
-      const count = this.candleCount(interval);
-      const requestedAt = this.now() / 1000;
-      const end = Math.floor(requestedAt / interval) * interval;
-      const start = end - count * interval;
+      const window = this.historyWindow(interval);
       const query = new URLSearchParams({
         instrument,
         price_type: "bid",
         timeframe: timeframes[interval],
-        from: new Date(start * 1000).toISOString(),
-        count: String(count),
+        from: new Date(window.from * 1000).toISOString(),
+        to: new Date(window.to * 1000).toISOString(),
       });
       const body = await this.get(
         this.ap!,
@@ -404,11 +388,7 @@ export class ExnessReader {
         signal,
         "getCandleHistory",
       );
-      return normalizeHistory(body, count, {
-        from: start,
-        now: requestedAt,
-        interval,
-      });
+      return normalizeHistory(body, window.max, window);
     } catch (error) {
       if (
         error instanceof ProviderError &&
@@ -457,7 +437,7 @@ export class ExnessReader {
               throw new ProviderError("EXNESS_INVALID_RESPONSE");
           } else if (result.stage === "limits") {
             await probe.fetchLimits(signal);
-            probe.candleCount(3600);
+            probe.historyWindow(3600);
           } else
             candleCount = (await probe.history("XAUUSD", 3600, signal)).length;
         }, signal);
@@ -477,7 +457,13 @@ export class ExnessReader {
           error: failure.code,
           stages,
           ...(failure.reason
-            ? { reason: failure.reason, candleCount: failure.candleCount }
+            ? {
+                reason: failure.reason,
+                candleCount: failure.candleCount,
+                ...(failure.rangeReason
+                  ? { rangeReason: failure.rangeReason }
+                  : {}),
+              }
             : {}),
           ...(failure.retryAfter ? { retryAfter: failure.retryAfter } : {}),
         };

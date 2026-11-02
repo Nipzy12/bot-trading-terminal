@@ -4,6 +4,7 @@ import {
   stageLabels,
   categoryMessages,
   candleReasonLabels,
+  rangeReasonLabels,
   type ClientReport,
 } from "./connection-report";
 type Connection = {
@@ -214,6 +215,11 @@ export function AccountManagement() {
           {report.error && (
             <p>
               {report.error} · {stageLabels[report.stage ?? "configuration"]}
+            </p>
+          )}
+          {report.rangeReason && (
+            <p>
+              {report.rangeReason} · {rangeReasonLabels[report.rangeReason]}
             </p>
           )}
           {report.reason && (

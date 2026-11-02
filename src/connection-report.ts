@@ -1,3 +1,9 @@
+export const rangeReasonLabels = {
+  BEFORE_FROM: "Candle sebelum awal rentang permintaan.",
+  AT_OR_AFTER_TO: "Candle mencapai atau melewati batas akhir eksklusif.",
+  UNFINISHED_CANDLE: "Candle belum tertutup pada batas akhir permintaan.",
+  TOO_MANY_CANDLES: "Jumlah candle melebihi batas permintaan.",
+} as const;
 export const candleReasonLabels = {
   EMPTY_CANDLES: "Respons candle kosong.",
   INVALID_SCHEMA: "Struktur candle tidak sesuai kontrak.",
@@ -42,6 +48,7 @@ export const categoryMessages = {
   CONNECTION_DELETED: "Koneksi sudah dihapus.",
 } as const;
 export type ClientReport = {
+  rangeReason?: keyof typeof rangeReasonLabels;
   reason?: keyof typeof candleReasonLabels;
   candleCount?: number;
   stage?: keyof typeof stageLabels;
@@ -56,6 +63,11 @@ export function parseReport(value: unknown): ClientReport | null {
   const v = value as Record<string, unknown>;
   if (!Array.isArray(v.stages)) return null;
   return {
+    rangeReason:
+      typeof v.rangeReason === "string" &&
+      Object.hasOwn(rangeReasonLabels, v.rangeReason)
+        ? (v.rangeReason as ClientReport["rangeReason"])
+        : undefined,
     reason:
       typeof v.reason === "string" &&
       Object.hasOwn(candleReasonLabels, v.reason)

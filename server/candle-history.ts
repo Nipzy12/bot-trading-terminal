@@ -11,10 +11,18 @@ export const candleReasons = [
   "AMBIGUOUS_INSTRUMENT",
 ] as const;
 export type CandleReason = (typeof candleReasons)[number];
+export const rangeReasons = [
+  "BEFORE_FROM",
+  "AT_OR_AFTER_TO",
+  "UNFINISHED_CANDLE",
+  "TOO_MANY_CANDLES",
+] as const;
+export type RangeReason = (typeof rangeReasons)[number];
 export class CandleHistoryError extends ProviderError {
   constructor(
     public reason: CandleReason,
     public candleCount = 0,
+    public rangeReason?: RangeReason,
   ) {
     super(
       reason === "INSTRUMENT_NOT_FOUND" || reason === "AMBIGUOUS_INSTRUMENT"
@@ -50,7 +58,34 @@ export function selectInstrument(ui: string, names: readonly string[]) {
   throw new CandleHistoryError("INSTRUMENT_NOT_FOUND");
 }
 const iso = z.iso.datetime({ offset: true });
-export type HistoryWindow = { from: number; now: number; interval: number };
+export type HistoryWindow = { from: number; to: number; interval: number };
+export function closedHistoryWindow(
+  now: number,
+  interval: number,
+  limits: {
+    max_candles_per_request: number;
+    history_range_days?: number;
+    history_age_days?: number;
+  },
+) {
+  const to = Math.floor(now / interval) * interval;
+  let capacity = Math.min(180, limits.max_candles_per_request);
+  if (limits.history_range_days !== undefined)
+    capacity = Math.min(
+      capacity,
+      Math.floor((limits.history_range_days * 86400) / interval),
+    );
+  let from = to - capacity * interval;
+  if (limits.history_age_days !== undefined)
+    from = Math.max(
+      from,
+      Math.ceil((now - limits.history_age_days * 86400) / interval) * interval,
+    );
+  const max = (to - from) / interval;
+  if (!Number.isSafeInteger(max) || max < 1)
+    throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
+  return { from, to, interval, max };
+}
 export function normalizeHistory(
   body: unknown,
   max: number,
@@ -66,7 +101,7 @@ export function normalizeHistory(
   const count = candles.length;
   if (!count) throw new CandleHistoryError("EMPTY_CANDLES", 0);
   if (count > Math.min(max, 5000))
-    throw new CandleHistoryError("OUT_OF_RANGE", count);
+    throw new CandleHistoryError("OUT_OF_RANGE", count, "TOO_MANY_CANDLES");
   let previous = 0;
   return candles.map((value) => {
     if (!value || typeof value !== "object" || Array.isArray(value))
@@ -110,8 +145,18 @@ export function normalizeHistory(
       throw new CandleHistoryError("INVALID_ORDER", count);
     previous = time;
     // No invented consecutive/alignment requirement: market-session gaps are legitimate.
-    if (window && (time < window.from || time + window.interval > window.now))
-      throw new CandleHistoryError("OUT_OF_RANGE", count);
+    if (window) {
+      if (time < window.from)
+        throw new CandleHistoryError("OUT_OF_RANGE", count, "BEFORE_FROM");
+      if (time >= window.to)
+        throw new CandleHistoryError("OUT_OF_RANGE", count, "AT_OR_AFTER_TO");
+      if (time + window.interval > window.to)
+        throw new CandleHistoryError(
+          "OUT_OF_RANGE",
+          count,
+          "UNFINISHED_CANDLE",
+        );
+    }
     return { time, open, high, low, close };
   });
 }

@@ -1,4 +1,8 @@
-import { CandleHistoryError, type CandleReason } from "./candle-history.js";
+import {
+  CandleHistoryError,
+  type CandleReason,
+  type RangeReason,
+} from "./candle-history.js";
 import { ProviderError } from "./provider-error.js";
 export const connectionStages = [
   "discovery",
@@ -34,12 +38,14 @@ export type ConnectionReport = {
   stage?: ConnectionStage | "configuration";
   error?: SafeCategory;
   reason?: CandleReason;
+  rangeReason?: RangeReason;
   candleCount?: number;
   retryAfter?: number;
 };
 export function safeFailure(error: unknown): {
   code: SafeCategory;
   reason?: CandleReason;
+  rangeReason?: RangeReason;
   candleCount?: number;
   retryAfter?: number;
 } {
@@ -53,7 +59,11 @@ export function safeFailure(error: unknown): {
   return {
     code,
     ...(error instanceof CandleHistoryError
-      ? { reason: error.reason, candleCount: error.candleCount }
+      ? {
+          reason: error.reason,
+          candleCount: error.candleCount,
+          ...(error.rangeReason ? { rangeReason: error.rangeReason } : {}),
+        }
       : {}),
     ...(error instanceof ProviderError && error.retryAfter
       ? {

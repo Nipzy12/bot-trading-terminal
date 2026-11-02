@@ -3,6 +3,7 @@ import { generateKeyPairSync, verify } from "node:crypto";
 import { ExnessReader } from "../server/exness";
 import {
   normalizeHistory,
+  closedHistoryWindow,
   selectInstrument,
   instrumentNames,
 } from "../server/candle-history";
@@ -26,7 +27,7 @@ const good = {
 };
 const window = {
   from: Date.UTC(2026, 10, 2, 10) / 1000,
-  now: now / 1000,
+  to: Math.floor(now / 1000 / 3600) * 3600,
   interval,
 };
 function fixture(
@@ -99,13 +100,17 @@ function fixture(
         );
       expect(u.pathname).toBe("/v1/market-data/accounts/123456/candles");
       expect(u.searchParams.get("timeframe")).toBe("H1");
-      expect(u.searchParams.get("to")).toBeNull();
+      expect(u.searchParams.get("count")).toBeNull();
+      expect(u.searchParams.get("to")).not.toBeNull();
       expect(u.searchParams.get("price_type")).toBe("bid");
       if (options.malformedJson)
         return new Response("not-json", { status: 200 });
       if (options.body !== undefined) return Response.json(options.body);
       const start = Date.parse(u.searchParams.get("from")!);
-      const count = Number(u.searchParams.get("count"));
+      const count =
+        (Date.parse(u.searchParams.get("to")!) -
+          Date.parse(u.searchParams.get("from")!)) /
+        (interval * 1000);
       return Response.json({
         candles: Array.from({ length: count }, (_, i) => ({
           ...good,
@@ -139,7 +144,8 @@ describe("verified account instrument mapping", () => {
       "/v1/configuration/accounts/123456/instruments",
     );
     expect(query.get("from")).toBe("2026-11-02T10:00:00.000Z");
-    expect(query.get("count")).toBe("2");
+    expect(query.get("count")).toBeNull();
+    expect(query.get("to")).toBe("2026-11-02T12:00:00.000Z");
     expect(JSON.stringify(report)).not.toContain(name);
     expect(JSON.stringify(report)).not.toContain(String(good.close));
   });
@@ -295,7 +301,10 @@ describe("strict candle diagnostics", () => {
     const f = fixture({ max: 5000, age: 1 });
     await f.reader.testConnection();
     const query = f.calls.at(-1)!.query;
-    expect(query.get("count")).toBe("23");
+    expect(query.get("count")).toBeNull();
+    expect(
+      (Date.parse(query.get("to")!) - Date.parse(query.get("from")!)) / 3600000,
+    ).toBe(23);
     expect(Date.parse(query.get("from")!)).toBeGreaterThanOrEqual(
       now - 86400000,
     );
@@ -311,5 +320,98 @@ describe("strict candle diagnostics", () => {
     });
     expect(report?.reason).toBeUndefined();
     expect(report?.candleCount).toBeUndefined();
+  });
+});
+
+describe("closed from/to windows", () => {
+  it("accepts 123 candles in 180 hours with a weekend session gap", async () => {
+    const w = closedHistoryWindow(now / 1000, 3600, {
+      max_candles_per_request: 5000,
+    });
+    const times = Array.from({ length: 180 }, (_, i) => w.from + i * 3600)
+      .filter((t) => ![0, 6].includes(new Date(t * 1000).getUTCDay()))
+      .slice(0, 123);
+    expect(times).toHaveLength(123);
+    const f = fixture({
+      max: 5000,
+      body: {
+        candles: times.map((t) => ({
+          ...good,
+          time: new Date(t * 1000).toISOString(),
+        })),
+      },
+    });
+    expect(await f.reader.testConnection()).toMatchObject({
+      success: true,
+      candleCount: 123,
+    });
+    const q = f.calls.at(-1)!.query;
+    expect(q.get("count")).toBeNull();
+    expect(Date.parse(q.get("to")!) - Date.parse(q.get("from")!)).toBe(
+      180 * 3600000,
+    );
+  });
+  it.each([
+    ["2026-11-02T09:00:00Z", "BEFORE_FROM"],
+    ["2026-11-02T12:00:00Z", "AT_OR_AFTER_TO"],
+    ["2026-11-02T13:00:00Z", "AT_OR_AFTER_TO"],
+    ["2026-11-02T11:30:00Z", "UNFINISHED_CANDLE"],
+  ])("rejects unsafe boundary with category %s", async (time, rangeReason) => {
+    const report = await fixture({
+      body: { candles: [{ ...good, time }] },
+    }).reader.testConnection();
+    expect(report).toMatchObject({
+      reason: "OUT_OF_RANGE",
+      rangeReason,
+      candleCount: 1,
+    });
+    expect(JSON.stringify(report)).not.toContain(time);
+    expect(parseReport(report)?.rangeReason).toBe(rangeReason);
+  });
+  it("accepts inclusive from and last closed candle", () => {
+    expect(
+      normalizeHistory(
+        { candles: [good, { ...good, time: "2026-11-02T11:00:00Z" }] },
+        2,
+        window,
+      ),
+    ).toHaveLength(2);
+  });
+  it("respects provider range, maximum and age, rejecting windows without a full candle", () => {
+    const w = closedHistoryWindow(now / 1000, 3600, {
+      max_candles_per_request: 5000,
+      history_range_days: 2,
+      history_age_days: 1,
+    });
+    expect(w.max).toBe(23);
+    expect(w.from).toBeGreaterThanOrEqual(now / 1000 - 86400);
+    expect(
+      closedHistoryWindow(now / 1000, 3600, {
+        max_candles_per_request: 3,
+        history_range_days: 1,
+      }).max,
+    ).toBe(3);
+    expect(
+      closedHistoryWindow(now / 1000, 3600, {
+        max_candles_per_request: 5000,
+        history_range_days: 2,
+      }).max,
+    ).toBe(48);
+    expect(() =>
+      closedHistoryWindow(now / 1000, 3600, {
+        max_candles_per_request: 5000,
+        history_age_days: 0,
+      }),
+    ).toThrow("EXNESS_LIMITS_UNAVAILABLE");
+  });
+  it("reports excessive count without leaking rows or accepting unknown diagnostics", async () => {
+    expect(
+      await fixture({
+        body: { candles: [good, good, good] },
+      }).reader.testConnection(),
+    ).toMatchObject({ rangeReason: "TOO_MANY_CANDLES", candleCount: 3 });
+    expect(
+      parseReport({ stages: [], rangeReason: config.privateKey })?.rangeReason,
+    ).toBeUndefined();
   });
 });

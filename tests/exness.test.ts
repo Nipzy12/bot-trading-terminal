@@ -100,7 +100,10 @@ function fixture(
           ([, v]) => v === u.searchParams.get("timeframe"),
         )![0],
       );
-      const count = Number(u.searchParams.get("count"));
+      const count =
+        (Date.parse(u.searchParams.get("to")!) -
+          Date.parse(u.searchParams.get("from")!)) /
+        (interval * 1000);
       return Response.json(
         options.history ?? {
           candles: Array.from({ length: count }, (_, i) => ({
@@ -192,8 +195,11 @@ describe("Exness read-only adapter contract", () => {
       const query = new URL(String(transport.mock.calls[3][0])).searchParams;
       expect(query.get("timeframe")).toBe(timeframe);
       expect(query.get("price_type")).toBe("bid");
-      expect(query.get("to")).toBeNull();
-      expect(query.get("count")).toBe("3");
+      expect(query.get("to")).not.toBeNull();
+      expect(query.get("count")).toBeNull();
+      expect(
+        (Date.parse(query.get("to")!) - Date.parse(query.get("from")!)) / 1000,
+      ).toBe(3 * Number(interval));
     },
   );
   it("caches discovery and coalesces same-market concurrent requests", async () => {
