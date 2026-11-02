@@ -21,7 +21,8 @@
     "test:backtest:browser": "node scripts/verify-backtest.mjs",
     "test:live:browser": "node scripts/verify-live.mjs",
     "test:live:csp": "node scripts/verify-live-csp.mjs",
-    "test:monitor:browser": "node scripts/verify-monitor.mjs"
+    "test:monitor:browser": "node scripts/verify-monitor.mjs",
+    "test:live:session:browser": "node scripts/verify-live-session.mjs"
   },
   "repository": {
     "type": "git",

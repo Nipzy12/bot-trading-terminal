@@ -1788,3 +1788,16 @@ main {
 .feed-warning:has(.live-diagnostic) {
   flex-wrap: wrap;
 }
+
+.feed-warning[role="status"] {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+.live-access-hint {
+  flex-basis: 100%;
+  line-height: 1.5;
+}
+.live-access-hint a {
+  color: inherit;
+  text-decoration: underline;
+}

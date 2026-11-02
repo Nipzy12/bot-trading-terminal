@@ -1,5 +1,9 @@
 import { BrokerMonitor } from "./BrokerMonitor";
-import type { LiveDiagnostic, RateInfo } from "./live-diagnostics";
+import {
+  liveAccessHint,
+  type LiveDiagnostic,
+  type RateInfo,
+} from "./live-diagnostics";
 import { useLive } from "./use-live";
 import { updateBars } from "./live";
 import React, { useEffect, useRef, useState } from "react";
@@ -622,6 +626,11 @@ function App() {
           <div className="feed-warning" role="status">
             EXNESS LIVE · {liveStatus} · Bid/Ask broker; OHLC tick teramati,
             candle aktif parsial setelah reconnect.{" "}
+            {liveAccessHint(liveStatus) && (
+              <span className="live-access-hint">
+                {liveAccessHint(liveStatus)} <a href="/accounts">Accounts</a>
+              </span>
+            )}
             {liveRate.rateLimitSource && (
               <span> · {liveRate.rateLimitSource}</span>
             )}

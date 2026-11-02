@@ -1,4 +1,8 @@
 import {
+  requireLiveSession,
+  revalidateLiveAccess,
+} from "./live-authorization.js";
+import {
   EXNESS_WS_PROTOCOL,
   pinnedTlsOptions,
   observeLive,
@@ -15,8 +19,7 @@ import { liveFailure } from "./live-preflight.js";
 import http from "node:http";
 import { createHmac, randomUUID } from "node:crypto";
 import { WebSocket, WebSocketServer } from "ws";
-import { fromNodeHeaders } from "better-auth/node";
-import { auth, configured, origin } from "./auth.js";
+import { configured, origin } from "./auth.js";
 import { database, takeRate } from "./database.js";
 import { decrypt } from "./vault.js";
 import { productionReader } from "./accounts.js";
@@ -91,10 +94,11 @@ export function attachLive(server: http.Server) {
     timer = setTimeout(() => stop("MAX_DURATION"), 25000);
     try {
       const url = new URL(req.url ?? "/", "https://nexus.invalid");
+      if (!configured()) throw new ProviderError("AUTH_UNAVAILABLE", 503);
       if (
         url.pathname !== "/api/live" ||
         req.headers.origin !== origin() ||
-        !configured()
+        req.headers["sec-fetch-site"] === "cross-site"
       )
         throw new ProviderError("ORIGIN_REJECTED", 403);
       const symbol = url.searchParams.get("symbol") ?? "XAUUSD",
@@ -106,10 +110,7 @@ export function attachLive(server: http.Server) {
         ![300, 900, 3600, 14400, 86400].includes(interval)
       )
         throw new ProviderError("INVALID_REQUEST", 400);
-      const identity = await auth().api.getSession({
-        headers: fromNodeHeaders(req.headers),
-      });
-      if (!identity) throw new ProviderError("SESSION_INVALID", 401);
+      const identity = await requireLiveSession(req.headers);
       const db = database(),
         owner = identity.user.id;
       const selected = await db.query(
@@ -194,18 +195,9 @@ export function attachLive(server: http.Server) {
         return;
       }
       if (closed) return;
-      const valid = async () => {
-        const session = await auth().api.getSession({
-          headers: fromNodeHeaders(req.headers),
-        });
-        if (session?.user.id !== owner) return false;
-        const found = await db.query(
-          "SELECT c.id FROM nexus_private.nexus_credentials c JOIN nexus_private.nexus_selection s ON s.credential_id=c.id AND s.user_id=c.user_id WHERE c.id=$1 AND c.user_id=$2 AND c.status='verified'",
-          [row.id, owner],
-        );
-        return !!found.rows.length;
-      };
-      if (!(await valid())) throw new ProviderError("CONNECTION_DELETED", 409);
+      const valid = () =>
+        revalidateLiveAccess(req.headers, identity, db, row.id);
+      await valid();
       if (closed) return;
       send({ type: "basis", connectionId: row.id, symbol, interval, candles });
       const upstreamHeaders = signedHeaders(
@@ -401,11 +393,9 @@ export function attachLive(server: http.Server) {
           return;
         }
         if (client?.readyState === WebSocket.OPEN) client.ping();
-        void valid()
-          .then((ok) => {
-            if (!ok) stop("AUTH_REVOKED");
-          })
-          .catch(() => stop("AUTH_UNAVAILABLE"));
+        void valid().catch((error) =>
+          stop(liveFailure(error, "AUTH_UNAVAILABLE")),
+        );
       }, 2000);
     } catch (error) {
       const category = (["TCP", "TLS", "HANDSHAKE"] as string[]).includes(phase)

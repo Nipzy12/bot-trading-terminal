@@ -1,9 +1,12 @@
+import {
+  requireLiveSession,
+  revalidateLiveAccess,
+} from "./live-authorization.js";
 import { liveBootstrap } from "./live-cache.js";
 import { rateInfo } from "../src/live-diagnostics.js";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHmac } from "node:crypto";
-import { fromNodeHeaders } from "better-auth/node";
-import { auth, configured, origin } from "./auth.js";
+import { configured, origin } from "./auth.js";
 import { database, takeRate } from "./database.js";
 import { decrypt } from "./vault.js";
 import { productionReader } from "./accounts.js";
@@ -31,27 +34,29 @@ export async function livePreflight(req: IncomingMessage, res: ServerResponse) {
       res.end();
       return;
     }
-    stage = "ORIGIN_REJECTED";
-    if (req.headers.origin !== origin()) throw new ProviderError(stage, 403);
-    stage = "SESSION_INVALID";
+    stage = "AUTH_UNAVAILABLE";
     if (!configured()) throw new ProviderError(stage, 503);
-    const identity = await auth().api.getSession({
-      headers: fromNodeHeaders(req.headers),
-    });
-    if (!identity) throw new ProviderError(stage, 401);
+    stage = "ORIGIN_REJECTED";
+    if (
+      req.headers.origin !== origin() ||
+      req.headers["sec-fetch-site"] === "cross-site"
+    )
+      throw new ProviderError(stage, 403);
+    const identity = await requireLiveSession(req.headers);
+    stage = "ACCOUNT_SERVICE_UNAVAILABLE";
     const db = database(),
       owner = identity.user.id;
     if (!(await takeRate(db, `live-preflight:${owner}`, 12, 60)))
       throw new ProviderError("RATE_LIMITED", 429, undefined, {
         rateLimitSource: "INTERNAL_USER",
       });
-    stage = "ACCOUNT_NOT_SELECTED";
+    stage = "ACCOUNT_SERVICE_UNAVAILABLE";
     const rows = await db.query(
       "SELECT c.id,c.envelope FROM nexus_private.nexus_credentials c JOIN nexus_private.nexus_selection s ON s.credential_id=c.id AND s.user_id=c.user_id WHERE c.user_id=$1 AND c.status='verified'",
       [owner],
     );
     const row = rows.rows[0];
-    if (!row) throw new ProviderError(stage, 409);
+    if (!row) throw new ProviderError("ACCOUNT_NOT_SELECTED", 409);
     stage = "BOOTSTRAP_FAILED";
     const config = decrypt(row.envelope, owner, row.id) as Config;
     const hash = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
@@ -83,29 +88,30 @@ export async function livePreflight(req: IncomingMessage, res: ServerResponse) {
       ![300, 900, 3600, 14400, 86400].includes(interval)
     )
       throw new ProviderError(stage, 400);
-    const { prepared } = await liveBootstrap(
-      db,
-      owner,
-      row.id,
-      symbol,
-      interval,
-      reader,
-    );
-    stage = "DNS_FAILED";
-    await bounded(
-      () => resolveHost(new URL(safeOrigin(prepared.host)).hostname),
-      AbortSignal.timeout(4000),
-    );
+    try {
+      const { prepared } = await liveBootstrap(
+        db,
+        owner,
+        row.id,
+        symbol,
+        interval,
+        reader,
+      );
+      stage = "DNS_FAILED";
+      await bounded(
+        () => resolveHost(new URL(safeOrigin(prepared.host)).hostname),
+        AbortSignal.timeout(4000),
+      );
+    } catch (error) {
+      // A credential can disappear while the provider governor/bootstrap is in
+      // flight. Diagnose lost authorization/selection without retrying Exness.
+      // Preserve actual quota rejections and their cooldown/source metadata.
+      if (!(error instanceof ProviderError && error.status === 429))
+        await revalidateLiveAccess(req.headers, identity, db, row.id);
+      throw error;
+    }
     stage = "BOOTSTRAP_FAILED";
-    const still = await db.query(
-      "SELECT c.id FROM nexus_private.nexus_credentials c JOIN nexus_private.nexus_selection s ON s.credential_id=c.id AND s.user_id=c.user_id WHERE c.id=$1 AND c.user_id=$2 AND c.status='verified'",
-      [row.id, owner],
-    );
-    const session = await auth().api.getSession({
-      headers: fromNodeHeaders(req.headers),
-    });
-    if (!still.rows.length || session?.user.id !== owner)
-      throw new ProviderError("SESSION_INVALID", 401);
+    await revalidateLiveAccess(req.headers, identity, db, row.id);
     res.writeHead(200, {
       "Content-Type": "application/json",
       "Cache-Control": "no-store",

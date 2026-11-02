@@ -5,6 +5,8 @@ import { generateKeyPairSync, verify } from "node:crypto";
 const state = vi.hoisted(() => ({
   upstreams: [] as any[],
   identity: true,
+  sessionId: "synthetic-session",
+  duringBootstrap: undefined as undefined | (() => Promise<void>),
   leased: false,
   selected: true,
   rate: true,
@@ -60,7 +62,9 @@ vi.mock("../server/auth", () => ({
   auth: () => ({
     api: {
       getSession: async () =>
-        state.identity ? { user: { id: "owner" } } : null,
+        state.identity
+          ? { user: { id: "owner" }, session: { id: state.sessionId } }
+          : null,
     },
   }),
 }));
@@ -70,7 +74,10 @@ vi.mock("../server/database", () => ({
     query: async (sql: string) => {
       if (sql.startsWith("SELECT account_hash"))
         return { rows: state.leased ? [{}] : [] };
-      if (sql.includes("c.id,c.envelope") && !state.selected)
+      if (
+        (sql.includes("c.id,c.envelope") || sql.startsWith("SELECT c.id")) &&
+        !state.selected
+      )
         return { rows: [] };
       if (sql.startsWith("INSERT INTO")) {
         if (state.leased) return { rows: [] };
@@ -107,6 +114,7 @@ vi.mock("../server/vault", () => ({
 vi.mock("../server/accounts", () => ({
   productionReader: () => ({
     prepareLive: async () => {
+      await state.duringBootstrap?.();
       if (state.failure) {
         const { ProviderError } = await import("../server/exness");
         throw new ProviderError(state.failure, 403);
@@ -140,6 +148,8 @@ afterEach(async () => {
   server?.closeAllConnections();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
   state.identity = true;
+  state.sessionId = "synthetic-session";
+  state.duringBootstrap = undefined;
   state.selected = true;
   state.rate = true;
   state.failure = "";
@@ -230,7 +240,7 @@ it.each([
 );
 
 it.each([
-  ["SESSION_INVALID", 401],
+  ["SESSION_MISSING", 401],
   ["ORIGIN_REJECTED", 403],
   ["ACCOUNT_NOT_SELECTED", 409],
   ["ACCOUNT_TRADE_MODE_DISABLED", 403],
@@ -245,7 +255,7 @@ it.each([
     await once(socket, "open");
     socket.terminate();
     await new Promise((r) => setTimeout(r, 10));
-    if (code === "SESSION_INVALID") state.identity = false;
+    if (code === "SESSION_MISSING") state.identity = false;
     if (code === "ACCOUNT_NOT_SELECTED") state.selected = false;
     if (code === "CONNECTION_QUOTA") state.leased = true;
     if (code === "RATE_LIMITED") state.rate = false;
@@ -938,4 +948,55 @@ it("does not replace an early ACK-candidate warning with a late subscription wri
     "UNKNOWN_BROKER_RESPONSE",
   );
   expect(frames.some((f) => f.code === "WAITING_FOR_BROKER_TICK")).toBe(false);
+});
+
+it.each([
+  ["revoked", "SESSION_REVOKED"],
+  ["session-changed", "SESSION_CHANGED"],
+  ["selection-changed", "SELECTED_CONNECTION_UNAVAILABLE"],
+] as const)(
+  "rechecks %s during upgrade bootstrap before exposing basis or dialing upstream",
+  async (kind, code) => {
+    let begin!: () => void, release!: () => void;
+    const began = new Promise<void>((r) => (begin = r)),
+      finish = new Promise<void>((r) => (release = r));
+    state.duringBootstrap = async () => {
+      begin();
+      await finish;
+    };
+    const { frames } = await observed();
+    await began;
+    if (kind === "revoked") state.identity = false;
+    if (kind === "session-changed")
+      state.sessionId = "different-private-session";
+    if (kind === "selection-changed") state.selected = false;
+    release();
+    await vi.waitFor(() =>
+      expect(frames).toContainEqual(expect.objectContaining({ code })),
+    );
+    expect(state.upstreams).toHaveLength(0);
+    expect(frames.some((f) => f.type === "basis" || f.type === "tick")).toBe(
+      false,
+    );
+    expect(state.leased).toBe(false);
+    expect(JSON.stringify(frames)).not.toContain("different-private-session");
+  },
+);
+it("stops an open upstream when its original session is replaced, without automatically retrying", async () => {
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  const { frames } = await observed(),
+    up = state.upstreams[0];
+  up.emit("open");
+  state.sessionId = "replacement-private-session";
+  await vi.advanceTimersByTimeAsync(2001);
+  await vi.waitFor(() =>
+    expect(frames).toContainEqual(
+      expect.objectContaining({ code: "SESSION_CHANGED" }),
+    ),
+  );
+  expect(state.upstreams).toHaveLength(1);
+  expect(state.leased).toBe(false);
+  expect(
+    JSON.stringify(frames) + JSON.stringify(vi.mocked(console.info).mock.calls),
+  ).not.toContain("replacement-private-session");
 });

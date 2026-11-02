@@ -73,7 +73,13 @@ export const networkStages = [
 ] as const;
 export const preflightCodes = [
   "DNS_FAILED",
-  "SESSION_INVALID",
+  "SESSION_INVALID", // Legacy deployment compatibility only.
+  "SESSION_MISSING",
+  "SESSION_REVOKED",
+  "SESSION_CHANGED",
+  "SELECTED_CONNECTION_UNAVAILABLE",
+  "AUTH_UNAVAILABLE",
+  "ACCOUNT_SERVICE_UNAVAILABLE",
   "ORIGIN_REJECTED",
   "ACCOUNT_NOT_SELECTED",
   "ACCOUNT_TRADE_MODE_DISABLED",
@@ -218,4 +224,21 @@ export function streamStatusLabel(code: string, value: unknown) {
   )
     parts.push(v.internalCode);
   return parts.join(" · ");
+}
+
+const liveAccessHints: Record<string, string> = {
+  SESSION_MISSING: "Masuk ke Accounts pada alamat situs yang sama.",
+  SESSION_REVOKED: "Sesi berakhir atau dicabut. Masuk kembali ke Accounts.",
+  SESSION_CHANGED:
+    "Sesi berubah selama pemeriksaan. Muat ulang setelah memastikan akun masuk.",
+  SELECTED_CONNECTION_UNAVAILABLE:
+    "Pilihan atau status koneksi berubah. Periksa koneksi terverifikasi di Accounts.",
+  ACCOUNT_NOT_SELECTED: "Pilih koneksi terverifikasi di Accounts.",
+  AUTH_UNAVAILABLE:
+    "Layanan autentikasi belum tersedia. Kredensial Exness tidak perlu diubah.",
+};
+export function liveAccessHint(code: string) {
+  return Object.hasOwn(liveAccessHints, code)
+    ? liveAccessHints[code]
+    : undefined;
 }
