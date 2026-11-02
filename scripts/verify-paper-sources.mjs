@@ -139,7 +139,18 @@ try {
   assert.equal(stored.accounts[2].positions[0].entry, 4000);
   assert.equal(stored.accounts[1].history.length, 1);
   await page.getByRole("link", { name: "Feed DEMO", exact: true }).click();
-  await ready();
+  await page.waitForFunction(
+    () =>
+      document.querySelectorAll(".trade-card").length === 3 &&
+      !document
+        .querySelector(".order-details")
+        ?.textContent.includes("Menunggu"),
+  );
+  // Legacy three positions are preserved; the new per-account cap blocks entry.
+  assert.equal(
+    await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),
+    true,
+  );
   assert.equal(await page.locator(".trade-card").count(), 3);
   stored = await book();
   assert.equal(stored.accounts[0].history.length, 0);

@@ -63,6 +63,7 @@ describe("live ticks and paper isolation", () => {
       q = {
         accountKey: accountKey(source),
         prices: { XAUUSD: 3900 },
+        sides: { XAUUSD: { bid: 3900, ask: 3901, timestamp: Date.now() } },
         expiresAt: Date.now() + 10000,
       };
     const a = openPosition(fresh(source), q, {

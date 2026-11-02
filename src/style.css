@@ -1801,3 +1801,27 @@ main {
   color: inherit;
   text-decoration: underline;
 }
+.mode-labels {
+  margin: 0 27px 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  color: #8d9bb3;
+  font-size: 10px;
+}
+.mode-labels b {
+  color: #c5d3e9;
+}
+.autopilot-status {
+  color: #6eddbb;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.ticker small {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.watch-price {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

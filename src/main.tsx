@@ -5,8 +5,20 @@ import {
   type RateInfo,
 } from "./live-diagnostics";
 import { useLive } from "./use-live";
-import { updateBars } from "./live";
-import React, { useEffect, useRef, useState } from "react";
+import {
+  LiveMarketStore,
+  marketQuotes,
+  watchQuote,
+  liveSignalStatus,
+} from "./market-store";
+import { executeSmaSignal } from "./autopilot";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  useSyncExternalStore,
+} from "react";
 import { createRoot } from "react-dom/client";
 import {
   createChart,
@@ -56,6 +68,7 @@ import {
   marketSource,
   ensureAccount,
   emptyQuotes,
+  executionPrice,
   mark,
   openPosition,
   robotStep,
@@ -172,7 +185,7 @@ function Chart({ data }: { data: Candle[] }) {
 function App() {
   const [symbol, setSymbol] = useState<Position["symbol"]>("XAUUSD"),
     [interval, setIntervalValue] = useState("3600"),
-    [data, setData] = useState<Candle[]>([]),
+    [fallbackData, setData] = useState<Candle[]>([]),
     [source, setSource] = useState("simulation"),
     [feedPause, setFeedPause] = useState(""),
     [feedEpoch, setFeedEpoch] = useState(0),
@@ -196,7 +209,7 @@ function App() {
     [feedSource, setFeedSource] = useState<PaperSource | null>(
       marketPath === "/api/market" ? DEMO : null,
     ),
-    [quotes, setQuotes] = useState<Quotes>(emptyQuotes()),
+    [fallbackQuotes, setQuotes] = useState<Quotes>(emptyQuotes()),
     [storageError, setStorageError] = useState(false),
     [sl, setSl] = useState(""),
     [tp, setTp] = useState(""),
@@ -204,6 +217,40 @@ function App() {
     [tab, setTab] = useState("Posisi"),
     [notice, setNotice] = useState(""),
     [search, setSearch] = useState("");
+  const storeRef = useRef<LiveMarketStore | null>(null);
+  if (!storeRef.current) storeRef.current = new LiveMarketStore();
+  const liveStore = storeRef.current;
+  const market = useSyncExternalStore(
+    liveStore.subscribe,
+    liveStore.getSnapshot,
+    liveStore.getSnapshot,
+  );
+  const liveScope =
+    market.symbol === symbol && market.interval === Number(interval);
+  const data = liveMode ? (liveScope ? market.bars : []) : fallbackData;
+  const quotes = useMemo(
+    () =>
+      liveMode
+        ? marketQuotes(market, symbol, Number(interval))
+        : fallbackQuotes,
+    [
+      fallbackQuotes,
+      market.quote,
+      market.freshness,
+      market.connectionId,
+      market.symbol,
+      market.interval,
+      symbol,
+      interval,
+    ],
+  );
+  const liveStatus = liveScope ? market.status : "CONNECTING";
+  const liveAsk =
+    liveScope && market.freshness === "FRESH" ? market.quote?.ask : undefined;
+  const liveBid =
+    liveScope && market.freshness === "FRESH" ? market.quote?.bid : undefined;
+  const signalStatus = liveScope ? liveSignalStatus(market) : "WAITING";
+  const handledSignal = useRef("");
   const account =
     book.accounts.find((a) => accountKey(a.source) === activeKey) ?? fresh();
   const feedKey = feedSource ? accountKey(feedSource) : "";
@@ -213,12 +260,16 @@ function App() {
       : `${account.source.kind} · ${account.source.connectionId.slice(0, 8)}`;
   const matchingFeed = activeKey !== null && activeKey === feedKey;
   function setAccount(update: (a: Account) => Account) {
-    setBook((b) => ({
-      ...b,
-      accounts: b.accounts.map((a) =>
-        accountKey(a.source) === activeKey ? update(a) : a,
-      ),
-    }));
+    setBook((b) => {
+      let changed = false;
+      const accounts = b.accounts.map((a) => {
+        if (accountKey(a.source) !== activeKey) return a;
+        const next = update(a);
+        changed ||= next !== a;
+        return next;
+      });
+      return changed ? { ...b, accounts } : b;
+    });
   }
   function activateFeed(next: PaperSource) {
     const key = accountKey(next);
@@ -230,8 +281,6 @@ function App() {
     }
     setFeedSource(next);
   }
-  const [liveAsk, setLiveAsk] = useState<number | undefined>();
-  const [liveStatus, setLiveStatus] = useState("CONNECTING");
   const [liveDiagnostic, setLiveDiagnostic] = useState<
     LiveDiagnostic | undefined
   >();
@@ -239,32 +288,27 @@ function App() {
   const liveCooldown = useLive(liveMode, symbol, Number(interval), feedEpoch, {
     rate: setLiveRate,
     diagnostic: setLiveDiagnostic,
+    clock: (now) => liveStore.clock(now),
+    begin: () => {
+      liveStore.begin(symbol, Number(interval));
+      setRobot(false);
+    },
     basis: (id, bars) => {
       setLiveRate({});
       setQuotes(emptyQuotes());
       setRobot(false);
       activateFeed({ kind: "EXNESS_LIVE", connectionId: id });
-      setData(bars);
+      liveStore.basis(id, symbol, Number(interval), bars);
       setSource("exness-live");
       setLoading(false);
       setError("");
     },
     tick: (t) => {
-      setLiveAsk(t.ask);
-      setData((b) => updateBars(b, t, Number(interval)));
-      setQuotes({
-        accountKey: `EXNESS_LIVE:${t.connectionId}`,
-        prices: { [symbol]: t.bid },
-        expiresAt: t.time + 10000,
-      });
+      liveStore.tick(t);
     },
     status: (s) => {
-      setLiveStatus(s);
-      if (s !== "EXNESS_LIVE") {
-        setQuotes(emptyQuotes());
-        setLiveAsk(undefined);
-        setRobot(false);
-      }
+      liveStore.status(s);
+      if (s !== "EXNESS_LIVE") setRobot(false);
     },
   });
   const paused = useRef(false);
@@ -292,7 +336,7 @@ function App() {
   const loss = dailyLoss(account, quotes);
   const orderPrice =
     quotes.accountKey === activeKey && matchingFeed
-      ? quotes.prices[symbol]
+      ? executionPrice(quotes, symbol, side)
       : undefined;
   useEffect(() => {
     try {
@@ -393,9 +437,10 @@ function App() {
     };
   }, [quoteSymbols, feedEpoch, feedKey]);
   const current = markets.find((m) => m.symbol === symbol)!;
-  const price =
-    (quotes.accountKey === feedKey ? quotes.prices[symbol] : undefined) ??
-    data.at(-1)?.close;
+  const price = liveMode
+    ? liveBid
+    : ((quotes.accountKey === feedKey ? quotes.prices[symbol] : undefined) ??
+      data.at(-1)?.close);
   useEffect(() => {
     if (liveMode) return;
     const controller = new AbortController();
@@ -435,6 +480,10 @@ function App() {
     return () => controller.abort();
   }, [symbol, interval, feedEpoch]);
   function order(orderSide = side) {
+    if (positions.length >= 3) {
+      setNotice("Maksimal tiga posisi paper; posisi lama tetap tersimpan.");
+      return;
+    }
     const volume = Number(size);
     if (
       !Number.isFinite(volume) ||
@@ -445,11 +494,12 @@ function App() {
       setNotice("Volume harus 0.01–10 lot dan data market harus tersedia.");
       return;
     }
+    const fillPrice = executionPrice(quotes, symbol, orderSide);
     const stop = sl === "" ? undefined : Number(sl),
       take = tp === "" ? undefined : Number(tp);
     if (
-      !orderPrice ||
-      !validStops(orderSide, orderPrice ?? 0, stop, take) ||
+      !fillPrice ||
+      !validStops(orderSide, fillPrice ?? 0, stop, take) ||
       (stop !== undefined && (!Number.isFinite(stop) || stop <= 0)) ||
       (take !== undefined && (!Number.isFinite(take) || take <= 0))
     ) {
@@ -483,6 +533,7 @@ function App() {
   const robotContext = useRef({ quotes, activeKey, feedKey });
   robotContext.current = { quotes, activeKey, feedKey };
   useEffect(() => {
+    if (liveMode) return;
     if (
       !robot ||
       riskBlocked ||
@@ -530,6 +581,31 @@ function App() {
     feedPause,
     activeKey,
     feedKey,
+  ]);
+  useEffect(() => {
+    if (
+      !liveMode ||
+      !robot ||
+      !liveScope ||
+      signalStatus !== "LIVE SIGNAL" ||
+      !market.signal.signal ||
+      !matchingFeed ||
+      riskBlocked
+    )
+      return;
+    const signal = market.signal.signal;
+    if (handledSignal.current === signal.id) return;
+    handledSignal.current = signal.id;
+    setAccount((a) => executeSmaSignal(a, quotes, signal, crypto.randomUUID()));
+  }, [
+    robot,
+    market.signal,
+    signalStatus,
+    matchingFeed,
+    riskBlocked,
+    quotes,
+    activeKey,
+    liveScope,
   ]);
   function emergency() {
     setRobot(false);
@@ -742,23 +818,78 @@ function App() {
           <p role="status">
             {!matchingFeed
               ? "Feed berbeda / belum terverifikasi: penilaian, SL/TP, penutupan dan robot akun ini ditangguhkan. Posisi tetap tersimpan."
-              : `${accountLabel} · ${account.source.kind === "EXNESS_LIVE" ? "Mark Bid tick broker, freshness 10 detik" : account.source.kind === "EXNESS" ? "Mark candle historis M5, bukan tick real-time" : "Harga simulasi DEMO"}`}
+              : `${accountLabel} · ${account.source.kind === "EXNESS_LIVE" ? "Entry Buy Ask / Sell Bid; exit Buy Bid / Sell Ask · fresh ≤10 detik" : account.source.kind === "EXNESS" ? "Mark candle historis M5, bukan tick real-time" : "Harga simulasi DEMO"}`}
           </p>
         </section>
-        <section className="ticker" aria-label="Snapshot DEMO">
-          {markets.slice(0, 5).map((m) => (
+        <section
+          className="mode-labels"
+          aria-label="Market signal execution labels"
+        >
+          <span>
+            MARKET DATA:{" "}
+            <b>
+              {liveMode
+                ? "EXNESS LIVE"
+                : source === "exness"
+                  ? "EXNESS HISTORY"
+                  : "DEMO"}
+            </b>
+          </span>
+          <span>
+            SIGNAL ENGINE: <b>AUTOPILOT</b>
+          </span>
+          <span>
+            EXECUTION MODE: <b>PAPER</b>
+          </span>
+          <span>
+            BROKER BALANCE: <b>EXNESS DEMO</b> · snapshot / tipe akun belum
+            diverifikasi
+          </span>
+          <span>
+            PAPER BALANCE: <b>NEXUS VIRTUAL</b>
+          </span>
+        </section>
+        <section
+          className="ticker"
+          aria-label={liveMode ? "EXNESS LIVE ticker" : "Snapshot DEMO"}
+        >
+          {(liveMode
+            ? [current, ...markets.filter((m) => m.symbol !== symbol)].slice(
+                0,
+                5,
+              )
+            : markets.slice(0, 5)
+          ).map((m) => (
             <button key={m.symbol} onClick={() => setSymbol(m.symbol)}>
               <span>
-                {m.symbol} · DEMO{" "}
+                {m.symbol} · {liveMode ? "EXNESS" : "DEMO"}{" "}
                 <small>
                   {m.symbol === "XAUUSD" ? "GOLD" : "FOREX / CRYPTO"}
                 </small>
               </span>
-              <strong>{fmt(m.price)}</strong>
-              <em className={m.change > 0 ? "green" : "red"}>
-                {m.change > 0 ? "+" : ""}
-                {m.change}%
-              </em>
+              {liveMode ? (
+                <>
+                  <strong>
+                    {watchQuote(market, m.symbol).quote
+                      ? fmt(watchQuote(market, m.symbol).quote!.bid)
+                      : "—"}
+                  </strong>
+                  <small>
+                    {watchQuote(market, m.symbol).status} ·{" "}
+                    {watchQuote(market, m.symbol).quote
+                      ? `Spread ${fmt(watchQuote(market, m.symbol).quote!.spread)}`
+                      : "Bid/Ask —"}
+                  </small>
+                </>
+              ) : (
+                <>
+                  <strong>{fmt(m.price)}</strong>
+                  <em className={m.change > 0 ? "green" : "red"}>
+                    {m.change > 0 ? "+" : ""}
+                    {m.change}%
+                  </em>
+                </>
+              )}
             </button>
           ))}
         </section>
@@ -988,9 +1119,9 @@ function App() {
                 <p>
                   Ask / spread{" "}
                   <strong>
-                    {liveAsk === undefined || orderPrice === undefined
+                    {liveAsk === undefined || liveBid === undefined
                       ? "Menunggu"
-                      : `${fmt(liveAsk)} / ${fmt(liveAsk - orderPrice)}`}
+                      : `${fmt(liveAsk)} / ${fmt(liveAsk - liveBid)}`}
                   </strong>
                 </p>
               )}
@@ -1009,7 +1140,7 @@ function App() {
                 Jenis eksekusi <strong>Paper trading</strong>
               </p>
               <p>
-                Batas posisi robot <strong>3 posisi</strong>
+                Batas posisi paper <strong>3 posisi</strong>
               </p>
             </div>
             <button
@@ -1020,6 +1151,7 @@ function App() {
                 riskBlocked ||
                 !matchingFeed ||
                 account.emergency ||
+                positions.length >= 3 ||
                 !orderPrice
               }
               className={`submit-order ${side === "Sell" ? "sell-bg" : ""}`}
@@ -1043,10 +1175,23 @@ function App() {
                 <span className="mini-badge">{account.source.kind}</span>
               </div>
               <p>
-                Strategi SMA 20 · interval 10 detik
+                Strategi SMA 20 ·{" "}
+                {liveMode
+                  ? "crossover candle tertutup"
+                  : "evaluasi DEMO/history 10 detik"}
                 <br />
                 Maksimal 3 posisi, volume 0.01 lot.
               </p>
+              <p className="autopilot-status">
+                {liveMode ? signalStatus : "DEMO / HISTORY SIGNAL"} · PAPER ONLY
+              </p>
+              {liveMode && (
+                <small>
+                  Tidak mengulang entry pada candle yang sama. SMA memakai close
+                  Bid; fill paper memakai Ask/Bid. OHLC tick teramati dapat
+                  parsial.
+                </small>
+              )}
               <label htmlFor="daily-limit">Batas rugi harian (USD, UTC)</label>
               <input
                 id="daily-limit"
@@ -1080,7 +1225,10 @@ function App() {
                     riskBlocked ||
                     !orderPrice)
                 }
-                onClick={() => setRobot(!robot)}
+                onClick={() => {
+                  handledSignal.current = market.signal.signal?.id ?? "";
+                  setRobot(!robot);
+                }}
               >
                 <span className="status-dot" />
                 {robot ? "Hentikan robot" : "Jalankan robot simulasi"}
@@ -1122,7 +1270,7 @@ function App() {
                 {!matchingFeed ||
                 positions.some((p) => mark(p, quotes) === undefined)
                   ? "Menunggu feed akun yang sesuai · P&L / equity belum dinilai"
-                  : `${accountLabel} · ${account.source.kind === "EXNESS_LIVE" ? "Mark Bid tick broker" : account.source.kind === "EXNESS" ? "Mark M5 history, bukan tick real-time" : "Mark DEMO"}`}
+                  : `${accountLabel} · ${account.source.kind === "EXNESS_LIVE" ? "Mark Buy Bid / Sell Ask tick broker" : account.source.kind === "EXNESS" ? "Mark M5 history, bukan tick real-time" : "Mark DEMO"}`}
               </small>
             </div>
             {storageError && (
@@ -1173,6 +1321,9 @@ function App() {
                     <div>
                       <span>{p.size} lot</span>
                       <small>Masuk {fmt(p.entry)}</small>
+                      {p.spreadCost !== undefined && (
+                        <small>Spread saat entry ${fmt(p.spreadCost)}</small>
+                      )}
                     </div>
                     <div>
                       <small>SL {p.sl ? fmt(p.sl) : "—"}</small>
@@ -1225,7 +1376,7 @@ function App() {
           </section>
           <section id="markets" className="watchlist panel">
             <div className="panel-title">
-              <h2>Watchlist · DEMO</h2>
+              <h2>Watchlist · {liveMode ? "EXNESS LIVE" : "DEMO"}</h2>
               <Star size={15} className="muted" />
             </div>
             <input
@@ -1237,7 +1388,7 @@ function App() {
             />
             <div className="watch-head">
               <span>SIMBOL / NAMA</span>
-              <span>HARGA / 24H</span>
+              <span>{liveMode ? "BID / ASK · STATUS" : "HARGA / 24H"}</span>
             </div>
             {markets
               .filter((m) =>
@@ -1261,23 +1412,43 @@ function App() {
                     <small>{m.name}</small>
                   </div>
                   <div className="watch-price">
-                    <strong>{fmt(m.price)}</strong>
-                    <small className={m.change > 0 ? "green" : "red"}>
-                      {m.change > 0 ? "+" : ""}
-                      {m.change.toFixed(2)}%
-                    </small>
+                    {liveMode ? (
+                      <>
+                        <strong>
+                          {watchQuote(market, m.symbol).quote
+                            ? `${fmt(watchQuote(market, m.symbol).quote!.bid)} / ${fmt(watchQuote(market, m.symbol).quote!.ask)}`
+                            : "— / —"}
+                        </strong>
+                        <small>{watchQuote(market, m.symbol).status}</small>
+                      </>
+                    ) : (
+                      <>
+                        <strong>{fmt(m.price)}</strong>
+                        <small className={m.change > 0 ? "green" : "red"}>
+                          {m.change > 0 ? "+" : ""}
+                          {m.change.toFixed(2)}%
+                        </small>
+                      </>
+                    )}
                   </div>
                 </button>
               ))}
-            <div className="watch-note">Snapshot demo · bukan kuotasi live</div>
+            <div className="watch-note">
+              {liveMode
+                ? `EXNESS · satu simbol aktif / satu stream akun · 24H tidak tersedia · umur quote ${market.quoteAgeMs === null ? "—" : (market.quoteAgeMs / 1000).toFixed(1) + "s"}`
+                : "Snapshot demo · bukan kuotasi live"}
+            </div>
           </section>
         </main>
         <footer>
           <span>
-            <i /> Semua sistem simulasi operasional
+            <i />{" "}
+            {liveMode
+              ? "Market EXNESS · eksekusi PAPER"
+              : "Semua sistem simulasi operasional"}
           </span>
           <span>
-            <ShieldCheck size={12} /> Live trading dinonaktifkan
+            <ShieldCheck size={12} /> Broker orders dinonaktifkan
           </span>
           <span>
             NEXUS TERMINAL <small>v5.0</small>

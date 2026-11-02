@@ -176,11 +176,27 @@ try {
     );
   }
   assert.equal(polling, 0);
+  async function freshAttempt() {
+    const before = await page.evaluate(
+      () => window.sockets.filter((s) => s.url.includes("/api/live?")).length,
+    );
+    await page
+      .getByRole("button", { name: "Hubungkan ulang manual", exact: true })
+      .click();
+    await page.waitForFunction(
+      (before) =>
+        window.sockets.filter((s) => s.url.includes("/api/live?")).length >
+        before,
+      before,
+    );
+  }
+
   for (const [code, brokerErrorCode] of [
     ["EXNESS_PERMISSION", 1002],
     ["EXNESS_SUBSCRIPTION_INVALID", 3000],
     ["UNKNOWN_BROKER_RESPONSE", 987654321],
   ]) {
+    await freshAttempt();
     await page.evaluate(
       ([code, brokerErrorCode]) =>
         window.sockets.at(-1).emit({
@@ -218,6 +234,7 @@ try {
     "WS_HTTP_REJECTED",
     "WS_DISCONNECTED",
   ]) {
+    await freshAttempt();
     await page.evaluate((code) => {
       const socket = window.sockets.at(-1);
       socket.emit({
@@ -274,6 +291,7 @@ try {
       false,
     );
   }
+  await freshAttempt();
   await page.evaluate(() =>
     window.sockets.at(-1).emit({
       type: "status",

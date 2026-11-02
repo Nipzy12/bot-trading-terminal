@@ -53,6 +53,10 @@ const positionSchema = z.object({
   size: z.number().min(0.01).max(10),
   entry: z.number().positive(),
   openedAt: z.number(),
+  signalId: z.string().max(250).optional(),
+  entryBid: z.number().positive().optional(),
+  entryAsk: z.number().positive().optional(),
+  spreadCost: z.number().nonnegative().optional(),
   sl: z.number().positive().optional(),
   tp: z.number().positive().optional(),
 });
@@ -78,6 +82,7 @@ export type Quotes = {
   expiresAt?: number;
   accountKey: string;
   prices: Record<string, number>;
+  sides?: Record<string, { bid: number; ask: number; timestamp: number }>;
 };
 export const emptyQuotes = (key = ""): Quotes => ({
   accountKey: key,
@@ -152,11 +157,47 @@ export function ensureAccount(book: PaperBook, source: PaperSource): PaperBook {
     ? book
     : { ...book, accounts: [...book.accounts, fresh(source)] };
 }
-export function mark(p: Position, q: Quotes): number | undefined {
-  if (q.expiresAt !== undefined && Date.now() >= q.expiresAt) return undefined;
-  const value = q.prices[p.symbol];
-  return p.accountKey === q.accountKey && Number.isFinite(value) && value > 0
-    ? value
+export function executionPrice(
+  q: Quotes,
+  symbol: string,
+  side: Position["side"],
+  operation: "entry" | "exit" = "entry",
+  now = Date.now(),
+): number | undefined {
+  if (q.expiresAt !== undefined && now >= q.expiresAt) return;
+  if (q.accountKey.startsWith("EXNESS_LIVE:")) {
+    const v = q.sides?.[symbol];
+    if (
+      !v ||
+      !Number.isFinite(q.expiresAt) ||
+      !Number.isFinite(v.bid) ||
+      !Number.isFinite(v.ask) ||
+      v.bid <= 0 ||
+      v.ask < v.bid ||
+      !Number.isFinite(v.timestamp) ||
+      v.timestamp > now + 2000 ||
+      now - v.timestamp >= 10000 ||
+      now >= v.timestamp + 10000
+    )
+      return;
+    return operation === "entry"
+      ? side === "Buy"
+        ? v.ask
+        : v.bid
+      : side === "Buy"
+        ? v.bid
+        : v.ask;
+  }
+  const v = q.prices[symbol];
+  return Number.isFinite(v) && v > 0 ? v : undefined;
+}
+export function mark(
+  p: Position,
+  q: Quotes,
+  now = Date.now(),
+): number | undefined {
+  return p.accountKey === q.accountKey
+    ? executionPrice(q, p.symbol, p.side, "exit", now)
     : undefined;
 }
 export function pnl(p: Position, q: Quotes): number | undefined {
@@ -275,19 +316,52 @@ export function openPosition(
 ): Account {
   const key = accountKey(a.source);
   const candidate = { ...input, accountKey: key, entry: 1 };
-  const entry = mark(candidate, q);
+  const entry =
+    q.accountKey === key
+      ? executionPrice(q, input.symbol, input.side)
+      : undefined;
   if (
     entry === undefined ||
     blocked(a, q, input.openedAt) ||
-    a.positions.length >= 100 ||
+    a.positions.length >= 3 ||
     !positionSchema.safeParse({ ...candidate, entry }).success ||
     !validStops(input.side, entry, input.sl, input.tp)
   )
     return a;
-  return {
+  const next: Account = {
     ...a,
-    positions: [...a.positions, { ...input, entry, accountKey: key }],
+    positions: [
+      ...a.positions,
+      {
+        ...input,
+        entry,
+        accountKey: key,
+        ...(a.source.kind === "EXNESS_LIVE"
+          ? {
+              entryBid: q.sides![input.symbol].bid,
+              entryAsk: q.sides![input.symbol].ask,
+              spreadCost: Math.abs(
+                pricePnl(
+                  {
+                    ...candidate,
+                    entry,
+                    size: input.size,
+                  },
+                  input.side === "Buy"
+                    ? q.sides![input.symbol].bid
+                    : q.sides![input.symbol].ask,
+                ),
+              ),
+            }
+          : {}),
+      },
+    ],
   };
+  // Spread is a real paper loss immediately at entry; latch the daily halt
+  // even if no subsequent tick arrives before price recovery/reload.
+  return (dailyLoss(next, q, input.openedAt) ?? -1) >= next.dailyLimit
+    ? { ...next, haltDay: day(input.openedAt) }
+    : next;
 }
 export function robotStep(
   a: Account,
@@ -297,6 +371,7 @@ export function robotStep(
   id: string,
   now = Date.now(),
 ): Account {
+  if (a.source.kind === "EXNESS_LIVE") return a; // LIVE uses closed-candle crossover signals only.
   const average = signal.average;
   if (signal.accountKey !== accountKey(a.source)) return a;
   const price = mark(
