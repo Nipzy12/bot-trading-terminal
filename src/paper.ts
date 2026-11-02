@@ -1,14 +1,15 @@
 import { z } from "zod";
 export const STORAGE_KEY = "nexus.paper.v2";
 export const LEGACY_STORAGE_KEY = "nexus.paper.v1";
-const sourceSchema = z.discriminatedUnion("kind", [
+export const sourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("DEMO") }).strict(),
   z.object({ kind: z.literal("EXNESS"), connectionId: z.uuid() }).strict(),
+  z.object({ kind: z.literal("EXNESS_LIVE"), connectionId: z.uuid() }).strict(),
 ]);
 export type PaperSource = z.infer<typeof sourceSchema>;
 export const DEMO: PaperSource = { kind: "DEMO" };
 export const accountKey = (source: PaperSource) =>
-  source.kind === "DEMO" ? "DEMO" : `EXNESS:${source.connectionId}`;
+  source.kind === "DEMO" ? "DEMO" : `${source.kind}:${source.connectionId}`;
 export function marketSource(
   value: unknown,
   expected: PaperSource["kind"],
@@ -73,7 +74,11 @@ const schema = z.object({
 export type Position = z.infer<typeof positionSchema>;
 export type Closed = z.infer<typeof closedSchema>;
 export type Account = z.infer<typeof schema>;
-export type Quotes = { accountKey: string; prices: Record<string, number> };
+export type Quotes = {
+  expiresAt?: number;
+  accountKey: string;
+  prices: Record<string, number>;
+};
 export const emptyQuotes = (key = ""): Quotes => ({
   accountKey: key,
   prices: {},
@@ -148,6 +153,7 @@ export function ensureAccount(book: PaperBook, source: PaperSource): PaperBook {
     : { ...book, accounts: [...book.accounts, fresh(source)] };
 }
 export function mark(p: Position, q: Quotes): number | undefined {
+  if (q.expiresAt !== undefined && Date.now() >= q.expiresAt) return undefined;
   const value = q.prices[p.symbol];
   return p.accountKey === q.accountKey && Number.isFinite(value) && value > 0
     ? value

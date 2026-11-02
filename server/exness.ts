@@ -538,6 +538,80 @@ export class ExnessReader {
     }
     return { success: true, stages, candleCount, ...diagnostics };
   }
+  async prepareLive(symbol: string) {
+    const signal = AbortSignal.timeout(6500);
+    return bounded(async () => {
+      await this.initialize(signal);
+      const instrument = await this.accountInstrument(symbol, signal);
+      const details = (await this.get(
+        this.ap!,
+        `/v1/configuration/accounts/${this.config.accountId}/account`,
+        signal,
+        "getAccountDetails",
+      )) as { account_id?: unknown; trade_mode?: unknown };
+      if (details.account_id !== this.config.accountId)
+        throw new ProviderError("EXNESS_INVALID_RESPONSE");
+      if (!["enabled", "trading_disabled"].includes(String(details.trade_mode)))
+        throw new ProviderError("EXNESS_INVALID_RESPONSE");
+      if (details.trade_mode === "trading_disabled")
+        throw new ProviderError("EXNESS_PERMISSION", 403);
+      const raw = await this.get(
+        this.ap!,
+        `/v1/configuration/accounts/${this.config.accountId}/limits`,
+        signal,
+        "getLimits",
+      );
+      const bucket = z.object({
+        limit: z.number().int().positive(),
+        window_seconds: z.number().positive(),
+        burst: z.number().int().positive(),
+      });
+      const ws = z
+        .object({
+          limits: z.object({
+            websocket: z.object({
+              global_account_limits: z.object({
+                max_active_connections: z.number().int().positive(),
+                max_inbound_message_bytes: z.number().int().positive(),
+                inbound_message_rate: bucket,
+                connection_rate: bucket,
+              }),
+              endpoints: z.array(
+                z.object({
+                  api_operation_id: z.string(),
+                  inbound_message_rate: bucket,
+                  connection_rate: bucket,
+                  subscription_operation_rate: z.record(z.string(), bucket),
+                }),
+              ),
+            }),
+          }),
+        })
+        .safeParse(raw);
+      if (!ws.success) throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
+      const endpoint = ws.data.limits.websocket.endpoints.find(
+        (e) => e.api_operation_id === "getWSTicks",
+      );
+      if (!endpoint?.subscription_operation_rate.ticks)
+        throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
+      const path = `/v1/server-events/accounts/${this.config.accountId}/ws/ticks`;
+      return {
+        host: this.ap!,
+        path,
+        instrument,
+        maxMessageBytes:
+          ws.data.limits.websocket.global_account_limits
+            .max_inbound_message_bytes,
+        rules: [
+          ws.data.limits.websocket.global_account_limits.connection_rate,
+          endpoint.connection_rate,
+          endpoint.subscription_operation_rate.ticks,
+          ws.data.limits.websocket.global_account_limits.inbound_message_rate,
+          endpoint.inbound_message_rate,
+        ],
+      };
+    }, signal);
+  }
   async historyPage(
     symbol: string,
     interval: number,

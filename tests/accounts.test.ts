@@ -496,6 +496,23 @@ describe("credential vault and private API", () => {
     expect(r.body.error).toBe("CONNECTION_DELETED");
     expect(r.body.paperSource).toBeUndefined();
   });
+  it("enforces one durable stream lease and allows recovery after TTL", async () => {
+    const sql =
+      "INSERT INTO nexus_private.nexus_stream_lease(account_hash,token,expires_at) VALUES($1,$2,now()+interval '30 seconds') ON CONFLICT(account_hash) DO UPDATE SET token=excluded.token,expires_at=excluded.expires_at WHERE nexus_stream_lease.expires_at<now() RETURNING token";
+    expect(
+      (await db.query(sql, ["synthetic-hash", "first"])).rows,
+    ).toHaveLength(1);
+    expect(
+      (await db.query(sql, ["synthetic-hash", "second"])).rows,
+    ).toHaveLength(0);
+    await db.query(
+      "UPDATE nexus_private.nexus_stream_lease SET expires_at=now()-interval '1 second' WHERE account_hash=$1",
+      ["synthetic-hash"],
+    );
+    expect(
+      (await db.query(sql, ["synthetic-hash", "third"])).rows[0].token,
+    ).toBe("third");
+  });
   it("enforces centralized atomic rate limits across independent application instances", async () => {
     const a = app(),
       b = app();

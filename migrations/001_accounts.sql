@@ -70,4 +70,6 @@ DROP TRIGGER IF EXISTS nexus_credential_cap_trigger ON nexus_credentials;
 CREATE TRIGGER nexus_credential_cap_trigger BEFORE INSERT ON nexus_credentials FOR EACH ROW EXECUTE FUNCTION nexus_credential_cap();
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA nexus_private FROM PUBLIC;
 
+CREATE TABLE IF NOT EXISTS nexus_private.nexus_stream_lease (account_hash text PRIMARY KEY, token text NOT NULL, expires_at timestamptz NOT NULL);
+REVOKE ALL ON nexus_private.nexus_stream_lease FROM PUBLIC;
 COMMIT;

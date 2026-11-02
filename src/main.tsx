@@ -1,3 +1,5 @@
+import { useLive } from "./use-live";
+import { updateBars } from "./live";
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -33,8 +35,9 @@ const Backtest = React.lazy(() =>
 const AccountManagement = React.lazy(() =>
   import("./AccountManagement").then((m) => ({ default: m.AccountManagement })),
 );
+const liveMode = new URLSearchParams(location.search).get("feed") === "live";
 const marketPath =
-  new URLSearchParams(location.search).get("feed") === "exness"
+  liveMode || new URLSearchParams(location.search).get("feed") === "exness"
     ? "/api/account/market"
     : "/api/market";
 import {
@@ -106,6 +109,10 @@ const fmt = (n: number) =>
   });
 function Chart({ data }: { data: Candle[] }) {
   const ref = useRef<HTMLDivElement>(null);
+  const seriesRef = useRef<ReturnType<
+    ReturnType<typeof createChart>["addSeries"]
+  > | null>(null);
+  const previousData = useRef<Candle[]>([]);
   useEffect(() => {
     if (!ref.current) return;
     const chart = createChart(ref.current, {
@@ -130,9 +137,29 @@ function Chart({ data }: { data: Candle[] }) {
       wickUpColor: "#26c6a0",
       wickDownColor: "#ed6175",
     });
+    seriesRef.current = series;
     series.setData(data.map((c) => ({ ...c, time: c.time as UTCTimestamp })));
     chart.timeScale().fitContent();
     return () => chart.remove();
+  }, []);
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    const prev = previousData.current;
+    if (
+      liveMode &&
+      prev.length &&
+      data.length >= prev.length &&
+      prev[0] === data[0] &&
+      data.at(-1)
+    )
+      series.update({
+        ...data.at(-1)!,
+        time: data.at(-1)!.time as UTCTimestamp,
+      });
+    else
+      series.setData(data.map((c) => ({ ...c, time: c.time as UTCTimestamp })));
+    previousData.current = data;
   }, [data]);
   return <div className="chart" ref={ref} />;
 }
@@ -177,7 +204,7 @@ function App() {
   const accountLabel =
     account.source.kind === "DEMO"
       ? "DEMO"
-      : `EXNESS · ${account.source.connectionId.slice(0, 8)}`;
+      : `${account.source.kind} · ${account.source.connectionId.slice(0, 8)}`;
   const matchingFeed = activeKey !== null && activeKey === feedKey;
   function setAccount(update: (a: Account) => Account) {
     setBook((b) => ({
@@ -197,6 +224,36 @@ function App() {
     }
     setFeedSource(next);
   }
+  const [liveAsk, setLiveAsk] = useState<number | undefined>();
+  const [liveStatus, setLiveStatus] = useState("CONNECTING");
+  useLive(liveMode, symbol, Number(interval), feedEpoch, {
+    basis: (id, bars) => {
+      setQuotes(emptyQuotes());
+      setRobot(false);
+      activateFeed({ kind: "EXNESS_LIVE", connectionId: id });
+      setData(bars);
+      setSource("exness-live");
+      setLoading(false);
+      setError("");
+    },
+    tick: (t) => {
+      setLiveAsk(t.ask);
+      setData((b) => updateBars(b, t, Number(interval)));
+      setQuotes({
+        accountKey: `EXNESS_LIVE:${t.connectionId}`,
+        prices: { [symbol]: t.bid },
+        expiresAt: t.time + 10000,
+      });
+    },
+    status: (s) => {
+      setLiveStatus(s);
+      if (s !== "EXNESS_LIVE") {
+        setQuotes(emptyQuotes());
+        setLiveAsk(undefined);
+        setRobot(false);
+      }
+    },
+  });
   const paused = useRef(false);
   function pauseFeed(seconds: number) {
     paused.current = true;
@@ -209,9 +266,13 @@ function App() {
   const dataLabel =
     loading || error || feedPause
       ? "UNVERIFIED"
-      : source === "exness"
-        ? "EXNESS · HISTORY"
-        : "DEMO";
+      : liveMode
+        ? liveStatus === "EXNESS_LIVE"
+          ? "EXNESS · LIVE"
+          : "UNVERIFIED"
+        : source === "exness"
+          ? "EXNESS · HISTORY"
+          : "DEMO";
   const { positions, history } = account;
   const riskBlocked = blocked(account, quotes);
   const { floating, realized, equity } = valuation(account, quotes);
@@ -243,6 +304,7 @@ function App() {
     .sort()
     .join(",");
   useEffect(() => {
+    if (liveMode) return;
     const controller = new AbortController();
     let refreshing = false;
     async function refresh() {
@@ -322,6 +384,7 @@ function App() {
     (quotes.accountKey === feedKey ? quotes.prices[symbol] : undefined) ??
     data.at(-1)?.close;
   useEffect(() => {
+    if (liveMode) return;
     const controller = new AbortController();
     setLoading(true);
     setError("");
@@ -382,7 +445,15 @@ function App() {
       );
       return;
     }
-    if (!matchingFeed || loading || error || feedPause || riskBlocked) return;
+    if (
+      !matchingFeed ||
+      loading ||
+      error ||
+      feedPause ||
+      riskBlocked ||
+      (liveMode && liveStatus !== "EXNESS_LIVE")
+    )
+      return;
     setAccount((a) =>
       openPosition(a, quotes, {
         id: crypto.randomUUID(),
@@ -419,7 +490,12 @@ function App() {
         context.quotes.accountKey !== key
       )
         return;
-      const average = data.slice(-20).reduce((sum, c) => sum + c.close, 0) / 20;
+      const closed = liveMode
+        ? data.filter((c) => c.time + Number(interval) <= Date.now() / 1000)
+        : data;
+      if (closed.length < 20) return;
+      const average =
+        closed.slice(-20).reduce((sum, c) => sum + c.close, 0) / 20;
       setAccount((a) =>
         robotStep(
           a,
@@ -533,6 +609,15 @@ function App() {
             </span>
           </div>
         </header>
+        {liveMode && (
+          <div className="feed-warning" role="status">
+            EXNESS LIVE · {liveStatus} · Bid/Ask broker; OHLC tick teramati,
+            candle aktif parsial setelah reconnect.{" "}
+            <button onClick={() => setFeedEpoch((n) => n + 1)}>
+              Hubungkan ulang manual
+            </button>
+          </div>
+        )}
         {feedPause && (
           <div className="feed-warning" role="alert">
             {feedPause}
@@ -603,17 +688,18 @@ function App() {
               <option key={accountKey(a.source)} value={accountKey(a.source)}>
                 {a.source.kind === "DEMO"
                   ? "DEMO"
-                  : `EXNESS · ${a.source.connectionId.slice(0, 8)}`}{" "}
+                  : `${a.source.kind} · ${a.source.connectionId.slice(0, 8)}`}{" "}
                 · {a.positions.length} posisi
               </option>
             ))}
           </select>
           <a href="/">Feed DEMO</a>
           <a href="/?feed=exness">Feed EXNESS history</a>
+          <a href="/?feed=live">Feed EXNESS LIVE</a>
           <p role="status">
             {!matchingFeed
               ? "Feed berbeda / belum terverifikasi: penilaian, SL/TP, penutupan dan robot akun ini ditangguhkan. Posisi tetap tersimpan."
-              : `${accountLabel} · ${account.source.kind === "EXNESS" ? "Mark candle historis M5, bukan tick real-time" : "Harga simulasi DEMO"}`}
+              : `${accountLabel} · ${account.source.kind === "EXNESS_LIVE" ? "Mark Bid tick broker, freshness 10 detik" : account.source.kind === "EXNESS" ? "Mark candle historis M5, bukan tick real-time" : "Harga simulasi DEMO"}`}
           </p>
         </section>
         <section className="ticker" aria-label="Snapshot DEMO">
@@ -745,7 +831,9 @@ function App() {
                   ? "Data belum terverifikasi"
                   : source === "simulation"
                     ? "DEMO · data simulasi, bukan harga live"
-                    : "EXNESS · candle history, bukan live ticks"}
+                    : liveMode
+                      ? "EXNESS LIVE · Bid tick broker · candle aktif teramati/parsial"
+                      : "EXNESS · candle history, bukan live ticks"}
               </span>
               <span className={error ? "red" : "green"}>
                 ●{" "}
@@ -853,9 +941,23 @@ function App() {
               />
             </div>
             <div className="order-details">
+              {liveMode && (
+                <p>
+                  Ask / spread{" "}
+                  <strong>
+                    {liveAsk === undefined || orderPrice === undefined
+                      ? "Menunggu"
+                      : `${fmt(liveAsk)} / ${fmt(liveAsk - orderPrice)}`}
+                  </strong>
+                </p>
+              )}
               <p>
                 Harga paper{" "}
-                {account.source.kind === "EXNESS" ? "EXNESS HISTORY" : "DEMO"}{" "}
+                {account.source.kind === "EXNESS_LIVE"
+                  ? "EXNESS LIVE"
+                  : account.source.kind === "EXNESS"
+                    ? "EXNESS HISTORY"
+                    : "DEMO"}{" "}
                 <strong>
                   {orderPrice === undefined ? "Menunggu" : fmt(orderPrice)}
                 </strong>
@@ -977,7 +1079,7 @@ function App() {
                 {!matchingFeed ||
                 positions.some((p) => mark(p, quotes) === undefined)
                   ? "Menunggu feed akun yang sesuai · P&L / equity belum dinilai"
-                  : `${accountLabel} · ${account.source.kind === "EXNESS" ? "Mark M5 history, bukan tick real-time" : "Mark DEMO"}`}
+                  : `${accountLabel} · ${account.source.kind === "EXNESS_LIVE" ? "Mark Bid tick broker" : account.source.kind === "EXNESS" ? "Mark M5 history, bukan tick real-time" : "Mark DEMO"}`}
               </small>
             </div>
             {storageError && (
@@ -1135,7 +1237,7 @@ function App() {
             <ShieldCheck size={12} /> Live trading dinonaktifkan
           </span>
           <span>
-            NEXUS TERMINAL <small>v4.0</small>
+            NEXUS TERMINAL <small>v5.0</small>
           </span>
         </footer>
       </div>
