@@ -543,18 +543,30 @@ export class ExnessReader {
     return bounded(async () => {
       await this.initialize(signal);
       const instrument = await this.accountInstrument(symbol, signal);
-      const details = (await this.get(
-        this.ap!,
-        `/v1/configuration/accounts/${this.config.accountId}/account`,
-        signal,
-        "getAccountDetails",
-      )) as { account_id?: unknown; trade_mode?: unknown };
-      if (details.account_id !== this.config.accountId)
-        throw new ProviderError("EXNESS_INVALID_RESPONSE");
-      if (!["enabled", "trading_disabled"].includes(String(details.trade_mode)))
-        throw new ProviderError("EXNESS_INVALID_RESPONSE");
-      if (details.trade_mode === "trading_disabled")
-        throw new ProviderError("EXNESS_PERMISSION", 403);
+      const parsed = z
+        .object({
+          account_id: z.string().regex(/^[1-9]\d{0,19}$/),
+          create_date: z.iso.datetime({ offset: true }),
+          settings: z.object({
+            currency: z.string(),
+            leverage: z.string(),
+            account_status: z.enum(["active", "close_only"]),
+            execution_mode: z.enum(["undefined", "instant", "market"]),
+            trade_mode: z.enum(["enabled", "trading_disabled"]),
+          }),
+        })
+        .safeParse(
+          await this.get(
+            this.ap!,
+            `/v1/configuration/accounts/${this.config.accountId}/account`,
+            signal,
+            "getAccountDetails",
+          ),
+        );
+      if (!parsed.success || parsed.data.account_id !== this.config.accountId)
+        throw new ProviderError("BOOTSTRAP_FAILED");
+      if (parsed.data.settings.trade_mode === "trading_disabled")
+        throw new ProviderError("ACCOUNT_TRADE_MODE_DISABLED", 403);
       const raw = await this.get(
         this.ap!,
         `/v1/configuration/accounts/${this.config.accountId}/limits`,

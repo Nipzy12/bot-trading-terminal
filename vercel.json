@@ -18,12 +18,12 @@
         "X-Content-Type-Options": "nosniff",
         "X-Frame-Options": "DENY",
         "Referrer-Policy": "no-referrer",
-        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' wss://bot-trading-terminal.vercel.app; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
       },
       "continue": true
     },
     {
-      "src": "/api/live",
+      "src": "/api/live(?:/preflight)?",
       "dest": "/api/live.ts"
     },
     {

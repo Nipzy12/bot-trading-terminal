@@ -1,3 +1,4 @@
+import { preflightCode, preflightCodes } from "./live-diagnostics";
 import { useEffect, useRef } from "react";
 import { z } from "zod";
 import { acceptTick, reconnectDelay, type Tick } from "./live";
@@ -26,13 +27,35 @@ export function useLive(
       reason = "",
       healthy = false;
     const status = (s: string) => h.current.status(s);
-    function connect() {
+    async function connect() {
       if (done || document.hidden) return;
       last = 0;
       id = "";
       healthy = false;
       reason = "";
       status("CONNECTING");
+      try {
+        const r = await fetch(
+          `/api/live/preflight?symbol=${symbol}&interval=${interval}`,
+          {
+            method: "POST",
+            credentials: "same-origin",
+            signal: AbortSignal.timeout(20000),
+            cache: "no-store",
+          },
+        );
+        const value = await r.json();
+        if (done || document.hidden) return;
+        if (!r.ok || value.ready !== true) {
+          reason = preflightCode(value.code);
+          status(reason);
+          return;
+        }
+      } catch {
+        if (!done) status("BOOTSTRAP_FAILED");
+        return;
+      }
+      if (done || document.hidden) return;
       socket = new WebSocket(
         `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/live?symbol=${symbol}&interval=${interval}`,
       );
@@ -71,6 +94,7 @@ export function useLive(
               status("EXNESS_LIVE");
             }
           } else if (raw.type === "status") {
+            healthy = false;
             reason = String(raw.code);
             status(
               [
@@ -82,6 +106,7 @@ export function useLive(
                 "EXNESS_NETWORK",
                 "EXNESS_UNAVAILABLE",
                 "AUTH_REVOKED",
+                ...preflightCodes,
               ].includes(reason)
                 ? reason
                 : "UNAVAILABLE",
@@ -95,7 +120,30 @@ export function useLive(
       };
       socket.onclose = () => {
         healthy = false;
-        status(reason || "STREAM_UNAVAILABLE");
+        status(reason || "WEBSOCKET_UPGRADE_FAILED");
+        if (!reason && !done && !document.hidden) {
+          void fetch(
+            `/api/live/preflight?symbol=${symbol}&interval=${interval}`,
+            {
+              method: "POST",
+              credentials: "same-origin",
+              signal: AbortSignal.timeout(20000),
+              cache: "no-store",
+            },
+          )
+            .then(async (r) => {
+              const v = await r.json();
+              if (!done)
+                status(
+                  r.ok && v.ready === true
+                    ? "WEBSOCKET_UPGRADE_FAILED"
+                    : preflightCode(v.code),
+                );
+            })
+            .catch(() => {
+              if (!done) status("WEBSOCKET_UPGRADE_FAILED");
+            });
+        }
         if (
           !done &&
           !document.hidden &&
@@ -107,7 +155,7 @@ export function useLive(
       };
       socket.onerror = () => {
         healthy = false;
-        status("STREAM_UNAVAILABLE");
+        status("WEBSOCKET_UPGRADE_FAILED");
       };
     }
     const visibility = () => {

@@ -6,6 +6,9 @@ const state = vi.hoisted(() => ({
   upstreams: [] as any[],
   identity: true,
   leased: false,
+  selected: true,
+  rate: true,
+  failure: "",
 }));
 vi.mock("ws", async () => {
   const actual = await vi.importActual<typeof import("ws")>("ws"),
@@ -37,9 +40,13 @@ vi.mock("../server/auth", () => ({
   }),
 }));
 vi.mock("../server/database", () => ({
-  takeRate: async () => true,
+  takeRate: async () => state.rate,
   database: () => ({
     query: async (sql: string) => {
+      if (sql.startsWith("SELECT account_hash"))
+        return { rows: state.leased ? [{}] : [] };
+      if (sql.includes("c.id,c.envelope") && !state.selected)
+        return { rows: [] };
       if (sql.startsWith("INSERT INTO")) {
         if (state.leased) return { rows: [] };
         state.leased = true;
@@ -73,12 +80,18 @@ vi.mock("../server/vault", () => ({
 }));
 vi.mock("../server/accounts", () => ({
   productionReader: () => ({
-    prepareLive: async () => ({
-      host: "https://ap.exness.test",
-      path: "/v1/server-events/accounts/123456/ws/ticks",
-      instrument: "XAUUSDm",
-      rules: [],
-    }),
+    prepareLive: async () => {
+      if (state.failure) {
+        const { ProviderError } = await import("../server/exness");
+        throw new ProviderError(state.failure, 403);
+      }
+      return {
+        host: "https://ap.exness.test",
+        path: "/v1/server-events/accounts/123456/ws/ticks",
+        instrument: "XAUUSDm",
+        rules: [],
+      };
+    },
     candles: async () => [],
   }),
 }));
@@ -86,6 +99,7 @@ vi.mock("../server/ssrf", () => ({
   safeOrigin: (s: string) => s,
   resolveHost: async () => [{ address: "8.8.8.8", family: 4 }],
 }));
+import { livePreflight } from "../server/live-preflight";
 import { attachLive } from "../server/live-bridge";
 const actual = await vi.importActual<typeof import("ws")>("ws");
 let server: http.Server | undefined, client: import("ws").WebSocket | undefined;
@@ -94,11 +108,18 @@ afterEach(async () => {
   server?.closeAllConnections();
   await new Promise<void>((resolve) => server?.close(() => resolve()));
   state.identity = true;
+  state.selected = true;
+  state.rate = true;
+  state.failure = "";
   state.leased = false;
   state.upstreams = [];
 });
 async function start(origin = "https://nexus.test") {
-  server = attachLive(http.createServer());
+  server = attachLive(
+    http.createServer((req, res) => {
+      void livePreflight(req, res);
+    }),
+  );
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const port = (server.address() as any).port;
@@ -169,5 +190,56 @@ it.each([
     expect(response.statusCode).toBe(status);
     response.destroy();
     expect(state.upstreams).toHaveLength(0);
+  },
+);
+
+it.each([
+  ["SESSION_INVALID", 401],
+  ["ORIGIN_REJECTED", 403],
+  ["ACCOUNT_NOT_SELECTED", 409],
+  ["ACCOUNT_TRADE_MODE_DISABLED", 403],
+  ["LIMITS_INVALID", 403],
+  ["CONNECTION_QUOTA", 429],
+  ["RATE_LIMITED", 429],
+  ["BOOTSTRAP_FAILED", 403],
+] as const)(
+  "returns safe authenticated preflight category %s",
+  async (code, status) => {
+    const socket = await start();
+    await once(socket, "open");
+    socket.terminate();
+    await new Promise((r) => setTimeout(r, 10));
+    if (code === "SESSION_INVALID") state.identity = false;
+    if (code === "ACCOUNT_NOT_SELECTED") state.selected = false;
+    if (code === "CONNECTION_QUOTA") state.leased = true;
+    if (code === "RATE_LIMITED") state.rate = false;
+    if (["ACCOUNT_TRADE_MODE_DISABLED", "BOOTSTRAP_FAILED"].includes(code))
+      state.failure = code;
+    if (code === "LIMITS_INVALID") state.failure = "EXNESS_LIMITS_UNAVAILABLE";
+    const port = (server!.address() as any).port;
+    const r = await fetch(`http://127.0.0.1:${port}/api/live/preflight`, {
+      method: "POST",
+      headers: {
+        origin:
+          code === "ORIGIN_REJECTED"
+            ? "https://evil.test"
+            : "https://nexus.test",
+      },
+    });
+    expect(r.status).toBe(status);
+    const text = await r.text();
+    expect(JSON.parse(text)).toMatchObject({
+      ready: false,
+      code,
+      brokerLiveVerified: false,
+    });
+    for (const forbidden of [
+      "123456",
+      "PRIVATE KEY",
+      "EXN-",
+      "ap.exness.test",
+      "synthetic-key",
+    ])
+      expect(text).not.toContain(forbidden);
   },
 );

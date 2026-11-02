@@ -12,7 +12,8 @@ try {
   await page.addInitScript(() => {
     window.sockets = [];
     window.WebSocket = class {
-      constructor() {
+      constructor(url) {
+        this.url = url;
         window.sockets.push(this);
       }
       close() {
@@ -23,6 +24,11 @@ try {
       }
     };
   });
+  await page.route("**/api/live/preflight?**", (r) =>
+    r.fulfill({
+      json: { ready: true, code: "READY", brokerLiveVerified: false },
+    }),
+  );
   let polling = 0;
   page.on("request", (r) => {
     if (r.url().includes("/api/account/market")) polling++;
@@ -64,16 +70,14 @@ try {
     .first()
     .evaluate((el) => (window.originalCanvas = el));
   await page.evaluate(() =>
-    window.sockets
-      .at(-1)
-      .emit({
-        type: "tick",
-        connectionId: "11111111-1111-4111-8111-111111111111",
-        symbol: "XAUUSD",
-        time: Date.now() + 1,
-        bid: 3902,
-        ask: 3903,
-      }),
+    window.sockets.at(-1).emit({
+      type: "tick",
+      connectionId: "11111111-1111-4111-8111-111111111111",
+      symbol: "XAUUSD",
+      time: Date.now() + 1,
+      bid: 3902,
+      ask: 3903,
+    }),
   );
   assert.equal(
     await page
@@ -94,6 +98,32 @@ try {
   assert.equal(polling, 0);
   await page.evaluate(() =>
     window.sockets.at(-1).emit({ type: "status", code: "RATE_LIMITED" }),
+  );
+  assert.equal(
+    await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),
+    true,
+  );
+  await page.unroute("**/api/live/preflight?**");
+  await page.route("**/api/live/preflight?**", (r) =>
+    r.fulfill({
+      status: 403,
+      json: {
+        ready: false,
+        code: "ACCOUNT_TRADE_MODE_DISABLED",
+        brokerLiveVerified: false,
+      },
+    }),
+  );
+  await page.reload();
+  await page
+    .getByRole("status")
+    .filter({ hasText: "ACCOUNT_TRADE_MODE_DISABLED" })
+    .waitFor();
+  assert.equal(
+    await page.evaluate(
+      () => window.sockets.filter((s) => s.url.includes("/api/live?")).length,
+    ),
+    0,
   );
   assert.equal(
     await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),

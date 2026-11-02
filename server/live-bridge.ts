@@ -1,3 +1,4 @@
+import { liveFailure } from "./live-preflight.js";
 import { z } from "zod";
 import http from "node:http";
 import { createHmac, randomUUID } from "node:crypto";
@@ -56,7 +57,7 @@ export function attachLive(server: http.Server) {
         req.headers.origin !== origin() ||
         !configured()
       )
-        throw new ProviderError("UNAVAILABLE", 403);
+        throw new ProviderError("ORIGIN_REJECTED", 403);
       const symbol = url.searchParams.get("symbol") ?? "XAUUSD",
         interval = Number(url.searchParams.get("interval") ?? 3600);
       if (
@@ -69,7 +70,7 @@ export function attachLive(server: http.Server) {
       const identity = await auth().api.getSession({
         headers: fromNodeHeaders(req.headers),
       });
-      if (!identity) throw new ProviderError("UNAUTHORIZED", 401);
+      if (!identity) throw new ProviderError("SESSION_INVALID", 401);
       const db = database(),
         owner = identity.user.id;
       if (!(await takeRate(db, `live-user:${owner}`, 12, 60)))
@@ -79,7 +80,7 @@ export function attachLive(server: http.Server) {
         [owner],
       );
       const row = selected.rows[0];
-      if (!row) throw new ProviderError("NO_VERIFIED_ACCOUNT_SELECTED", 409);
+      if (!row) throw new ProviderError("ACCOUNT_NOT_SELECTED", 409);
       const config = decrypt(row.envelope, owner, row.id) as Config;
       hash = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
         .update(config.accountId)
@@ -221,6 +222,7 @@ export function attachLive(server: http.Server) {
           .catch(() => stop("AUTH_UNAVAILABLE"));
       }, 2000);
     } catch (error) {
+      const category = liveFailure(error);
       const status =
         error instanceof ProviderError &&
         [400, 401, 403, 409, 429].includes(error.status)
@@ -232,7 +234,7 @@ export function attachLive(server: http.Server) {
         );
         socket.destroy();
       }
-      stop("UNAVAILABLE");
+      stop(category);
     }
   });
   return server;

@@ -1,3 +1,4 @@
+import { livePreflight } from "./live-preflight.js";
 import { historyQuery, demoHistory } from "./backtest-history.js";
 import express from "express";
 import { toNodeHandler } from "better-auth/node";
@@ -61,6 +62,9 @@ app.all("/api/auth/{*path}", async (req, res) => {
   }
 });
 app.use(express.json({ limit: "8kb" }));
+app.post("/api/live/preflight", (req, res) => {
+  void livePreflight(req, res);
+});
 app.use("/api/account", accountRouter());
 app.get("/api/health", (_req, res) =>
   res.json({ status: "ok", execution: "simulation", liveTrading: false }),
