@@ -29,6 +29,19 @@ vi.mock("ws", async () => {
   }
   return { ...actual, WebSocket: Upstream };
 });
+vi.mock("../server/live-cache", () => ({
+  liveBootstrap: async (
+    _db: unknown,
+    _owner: string,
+    _id: string,
+    symbol: string,
+    interval: number,
+    reader: any,
+  ) => ({
+    prepared: await reader.prepareLive(symbol),
+    candles: await reader.candles(symbol, interval),
+  }),
+}));
 vi.mock("../server/auth", () => ({
   configured: () => true,
   origin: () => "https://nexus.test",
@@ -233,6 +246,16 @@ it.each([
       code,
       brokerLiveVerified: false,
     });
+    if (code === "RATE_LIMITED")
+      expect(JSON.parse(text)).toMatchObject({
+        rateLimitSource: "INTERNAL_USER",
+      });
+    if (code === "CONNECTION_QUOTA")
+      expect(JSON.parse(text)).toMatchObject({
+        rateLimitSource: "INTERNAL_WS_LEASE",
+      });
+    if (code === "RATE_LIMITED" || code === "CONNECTION_QUOTA")
+      expect(JSON.parse(text).retryAfterSec).toBeUndefined();
     for (const forbidden of [
       "123456",
       "PRIVATE KEY",
@@ -241,5 +264,57 @@ it.each([
       "synthetic-key",
     ])
       expect(text).not.toContain(forbidden);
+  },
+);
+it("rejects a second tab via the shared lease without opening another upstream", async () => {
+  const first = await start();
+  await once(first, "open");
+  await vi.waitFor(() => expect(state.upstreams).toHaveLength(1));
+  const port = (server!.address() as any).port;
+  const second = new actual.WebSocket(
+    `ws://127.0.0.1:${port}/api/live?symbol=XAUUSD&interval=3600`,
+    { origin: "https://nexus.test" },
+  );
+  const [bytes] = await once(second, "message");
+  const message = JSON.parse(bytes.toString());
+  expect(message).toMatchObject({
+    type: "status",
+    code: "CONNECTION_QUOTA",
+    rateLimitSource: "INTERNAL_WS_LEASE",
+  });
+  expect(message.retryAfterSec).toBeUndefined();
+  expect(state.upstreams).toHaveLength(1);
+  second.terminate();
+});
+it.each([
+  ["session", 401],
+  ["selection", 409],
+] as const)(
+  "does not reuse a preflight auth decision after %s revocation",
+  async (kind, status) => {
+    server = attachLive(
+      http.createServer((req, res) => {
+        void livePreflight(req, res);
+      }),
+    );
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const port = (server.address() as any).port;
+    const preflight = await fetch(
+      `http://127.0.0.1:${port}/api/live/preflight`,
+      { method: "POST", headers: { origin: "https://nexus.test" } },
+    );
+    expect((await preflight.json()).ready).toBe(true);
+    if (kind === "session") state.identity = false;
+    else state.selected = false;
+    client = new actual.WebSocket(
+      `ws://127.0.0.1:${port}/api/live?symbol=XAUUSD&interval=3600`,
+      { origin: "https://nexus.test" },
+    );
+    client.on("error", () => {});
+    const [, response] = await once(client, "unexpected-response");
+    expect(response.statusCode).toBe(status);
+    response.destroy();
+    expect(state.upstreams).toHaveLength(0);
   },
 );

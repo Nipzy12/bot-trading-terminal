@@ -6,7 +6,10 @@ const browser = await chromium.launch({
   args: ["--no-sandbox"],
 });
 try {
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+  });
+  const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.addInitScript(() => {
@@ -97,12 +100,45 @@ try {
   }
   assert.equal(polling, 0);
   await page.evaluate(() =>
-    window.sockets.at(-1).emit({ type: "status", code: "RATE_LIMITED" }),
+    window.sockets.at(-1).emit({
+      type: "status",
+      code: "RATE_LIMITED",
+      rateLimitSource: "EXNESS_WS",
+      retryAfterSec: 5,
+    }),
   );
   assert.equal(
     await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),
     true,
   );
+  const reconnect = page.getByRole("button", {
+    name: "Hubungkan ulang manual",
+    exact: true,
+  });
+  assert.equal(await reconnect.isDisabled(), true);
+  const socketsBefore = await page.evaluate(
+    () => window.sockets.filter((s) => s.url.includes("/api/live?")).length,
+  );
+  const second = await page.context().newPage();
+  let secondRequests = 0;
+  second.on("request", (r) => {
+    if (r.url().includes("/api/live/preflight")) secondRequests++;
+  });
+  await second.goto("http://localhost:5173/?feed=live");
+  await second.waitForFunction(
+    () => document.querySelector(".feed-warning button")?.disabled === true,
+  );
+  assert.equal(secondRequests, 0);
+  await second.close();
+  await page.waitForTimeout(5500);
+  assert.equal(await reconnect.isDisabled(), false);
+  assert.equal(
+    await page.evaluate(
+      () => window.sockets.filter((s) => s.url.includes("/api/live?")).length,
+    ),
+    socketsBefore,
+  );
+
   await page.unroute("**/api/live/preflight?**");
   await page.route("**/api/live/preflight?**", (r) =>
     r.fulfill({

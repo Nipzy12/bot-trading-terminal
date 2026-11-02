@@ -100,7 +100,9 @@ export function productionReader(config: Config, owner: string, id: string) {
               r.window_seconds,
             ))
           )
-            throw new ProviderError("EXNESS_RATE_LIMIT", 429, r.window_seconds);
+            throw new ProviderError("EXNESS_RATE_LIMIT", 429, undefined, {
+              rateLimitSource: "INTERNAL_PROVIDER_REST",
+            });
       } catch (error) {
         if (error instanceof ProviderError) throw error;
         throw new ProviderError("ACCOUNT_SERVICE_UNAVAILABLE", 503);

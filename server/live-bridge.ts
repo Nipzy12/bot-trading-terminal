@@ -1,3 +1,5 @@
+import { liveBootstrap } from "./live-cache.js";
+import { rateInfo, type RateInfo } from "../src/live-diagnostics.js";
 import { liveFailure } from "./live-preflight.js";
 import { z } from "zod";
 import http from "node:http";
@@ -31,12 +33,12 @@ export function attachLive(server: http.Server) {
       if (client?.readyState === WebSocket.OPEN)
         client.send(JSON.stringify(value));
     };
-    const stop = (code = "DISCONNECTED") => {
+    const stop = (code = "DISCONNECTED", info: RateInfo = {}) => {
       if (closed) return;
       closed = true;
       clearTimeout(timer);
       clearInterval(check);
-      send({ type: "status", code });
+      send({ type: "status", code, ...info });
       upstream?.terminate();
       client?.close(1000);
       if (!client) socket.destroy();
@@ -73,14 +75,22 @@ export function attachLive(server: http.Server) {
       if (!identity) throw new ProviderError("SESSION_INVALID", 401);
       const db = database(),
         owner = identity.user.id;
-      if (!(await takeRate(db, `live-user:${owner}`, 12, 60)))
-        throw new ProviderError("RATE_LIMITED", 429);
       const selected = await db.query(
         "SELECT c.id,c.envelope FROM nexus_private.nexus_credentials c JOIN nexus_private.nexus_selection s ON s.credential_id=c.id AND s.user_id=c.user_id WHERE c.user_id=$1 AND c.status='verified'",
         [owner],
       );
       const row = selected.rows[0];
       if (!row) throw new ProviderError("ACCOUNT_NOT_SELECTED", 409);
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        client = ws;
+        ws.on("close", () => stop());
+        ws.on("message", () => stop("INVALID_CLIENT_MESSAGE"));
+      });
+      if (!(await takeRate(db, `live-user:${owner}`, 12, 60)))
+        throw new ProviderError("RATE_LIMITED", 429, undefined, {
+          rateLimitSource: "INTERNAL_USER",
+        });
+      if (closed) return;
       const config = decrypt(row.envelope, owner, row.id) as Config;
       hash = createHmac("sha256", process.env.BETTER_AUTH_SECRET!)
         .update(config.accountId)
@@ -92,10 +102,27 @@ export function attachLive(server: http.Server) {
       );
       if (!acquired.rows.length) {
         lease = undefined;
-        throw new ProviderError("CONNECTION_QUOTA", 429);
+        throw new ProviderError("CONNECTION_QUOTA", 429, undefined, {
+          rateLimitSource: "INTERNAL_WS_LEASE",
+        });
       }
-      const reader = productionReader(config, owner, row.id),
-        prepared = await reader.prepareLive(symbol);
+      if (closed) {
+        await db.query(
+          "DELETE FROM nexus_private.nexus_stream_lease WHERE account_hash=$1 AND token=$2",
+          [hash, lease],
+        );
+        return;
+      }
+      const reader = productionReader(config, owner, row.id);
+      const { prepared, candles } = await liveBootstrap(
+        db,
+        owner,
+        row.id,
+        symbol,
+        interval,
+        reader,
+      );
+      if (closed) return;
       for (const [i, r] of prepared.rules.entries())
         if (
           !(await takeRate(
@@ -105,14 +132,16 @@ export function attachLive(server: http.Server) {
             Math.ceil(r.window_seconds),
           ))
         )
-          throw new ProviderError("RATE_LIMITED", 429);
+          throw new ProviderError("RATE_LIMITED", 429, undefined, {
+            rateLimitSource: "INTERNAL_WS_LEASE",
+          });
       const subscription = JSON.stringify({
         id: randomUUID(),
         subscribe: { event: "ticks", instruments: [prepared.instrument] },
       });
       if (Buffer.byteLength(subscription) > prepared.maxMessageBytes)
         throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
-      const candles = await reader.candles(symbol, interval);
+
       const host = safeOrigin(prepared.host),
         addresses = await bounded(
           () => resolveHost(new URL(host).hostname),
@@ -132,11 +161,6 @@ export function attachLive(server: http.Server) {
       };
       if (!(await valid())) throw new ProviderError("CONNECTION_DELETED", 409);
       if (closed) return;
-      wss.handleUpgrade(req, socket, head, (ws) => {
-        client = ws;
-        ws.on("close", () => stop());
-        ws.on("message", () => stop("INVALID_CLIENT_MESSAGE"));
-      });
       send({ type: "basis", connectionId: row.id, symbol, interval, candles });
       upstream = new WebSocket(
         host.replace(/^https:/, "wss:") + prepared.path,
@@ -161,7 +185,16 @@ export function attachLive(server: http.Server) {
         try {
           const raw = JSON.parse(bytes.toString());
           if (raw.error || raw.code) {
-            stop("EXNESS_PERMISSION_OR_UNAVAILABLE");
+            stop(
+              Number(raw.code ?? raw.error?.code) === 3015 ||
+                Number(raw.code ?? raw.error?.code) === 1
+                ? "RATE_LIMITED"
+                : "EXNESS_PERMISSION_OR_UNAVAILABLE",
+              Number(raw.code ?? raw.error?.code) === 3015 ||
+                Number(raw.code ?? raw.error?.code) === 1
+                ? { rateLimitSource: "EXNESS_WS" }
+                : {},
+            );
             return;
           }
           if (
@@ -210,6 +243,14 @@ export function attachLive(server: http.Server) {
             : response.statusCode === 401 || response.statusCode === 403
               ? "EXNESS_PERMISSION"
               : "EXNESS_UNAVAILABLE",
+          response.statusCode === 429
+            ? {
+                rateLimitSource: "EXNESS_WS",
+                ...rateInfo({
+                  retryAfterSec: Number(response.headers["retry-after"]),
+                }),
+              }
+            : {},
         );
       });
       upstream.on("error", () => stop("EXNESS_NETWORK"));
@@ -234,7 +275,17 @@ export function attachLive(server: http.Server) {
         );
         socket.destroy();
       }
-      stop(category);
+      stop(
+        category,
+        rateInfo(
+          error instanceof ProviderError
+            ? {
+                rateLimitSource: error.details?.rateLimitSource,
+                retryAfterSec: error.retryAfter,
+              }
+            : {},
+        ),
+      );
     }
   });
   return server;

@@ -72,4 +72,6 @@ REVOKE ALL ON ALL FUNCTIONS IN SCHEMA nexus_private FROM PUBLIC;
 
 CREATE TABLE IF NOT EXISTS nexus_private.nexus_stream_lease (account_hash text PRIMARY KEY, token text NOT NULL, expires_at timestamptz NOT NULL);
 REVOKE ALL ON nexus_private.nexus_stream_lease FROM PUBLIC;
+CREATE TABLE IF NOT EXISTS nexus_private.nexus_live_bootstrap(cache_key text PRIMARY KEY, token text NOT NULL, lock_until timestamptz NOT NULL, expires_at timestamptz NOT NULL, envelope jsonb);
+REVOKE ALL ON nexus_private.nexus_live_bootstrap FROM PUBLIC;
 COMMIT;

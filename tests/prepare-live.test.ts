@@ -3,8 +3,9 @@ import { generateKeyPairSync, verify } from "node:crypto";
 import { ExnessReader } from "../server/exness";
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const bucket = { limit: 10, window_seconds: 60, burst: 10 };
-function reader(mode = "enabled", legacy = false) {
+function reader(mode = "enabled", legacy = false, calls: string[] = []) {
   const transport: typeof fetch = async (input, init) => {
+    calls.push(String(input));
     const u = new URL(String(input)),
       headers = init!.headers as Record<string, string>,
       bytes = Buffer.from(headers["EXN-DATA"], "base64url");
@@ -95,4 +96,13 @@ it("rejects missing nested settings and unknown modes", async () => {
   await expect(
     reader("full_access").prepareLive("XAUUSD"),
   ).rejects.toMatchObject({ code: "BOOTSTRAP_FAILED" });
+});
+
+it("deduplicates prepareLive and reuses initialization limits without a second REST read", async () => {
+  const calls: string[] = [],
+    r = reader("enabled", false, calls);
+  await Promise.all([r.prepareLive("XAUUSD"), r.prepareLive("XAUUSD")]);
+  await r.prepareLive("XAUUSD");
+  expect(calls.filter((p) => p.endsWith("/account"))).toHaveLength(1);
+  expect(calls.filter((p) => p.endsWith("/limits"))).toHaveLength(1);
 });

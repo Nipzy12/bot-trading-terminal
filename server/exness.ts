@@ -154,6 +154,16 @@ export class ExnessReader {
   private initializing?: Promise<void>;
   private limits?: Limits;
   private cooldown = 0;
+  private cooldownKnown = false;
+  private limitsRaw?: { at: number; value: unknown };
+  private liveMeta = new Map<
+    string,
+    { at: number; value: Awaited<ReturnType<ExnessReader["buildLive"]>> }
+  >();
+  private livePending = new Map<
+    string,
+    Promise<Awaited<ReturnType<ExnessReader["buildLive"]>>>
+  >();
   private usage: { at: number; operation: string }[] = [];
   private cache = new Map<string, { at: number; rows: Candle[] }>();
   private pending = new Map<string, Promise<Candle[]>>();
@@ -192,7 +202,10 @@ export class ExnessReader {
       throw new ProviderError(
         "EXNESS_RATE_LIMIT",
         429,
-        Math.ceil((this.cooldown - now) / 1000),
+        this.cooldownKnown
+          ? Math.ceil((this.cooldown - now) / 1000)
+          : undefined,
+        { rateLimitSource: "EXNESS_REST" },
       );
     if (this.limits) {
       const method = this.limits.methods.find(
@@ -216,6 +229,7 @@ export class ExnessReader {
               1,
               Math.ceil((calls[0].at + r.window_seconds * 1000 - now) / 1000),
             ),
+            { rateLimitSource: "INTERNAL_PROVIDER_REST" },
           );
       }
     }
@@ -285,13 +299,21 @@ export class ExnessReader {
           ? Math.min(86400, Math.ceil(seconds))
           : 60;
       this.cooldown = now + wait * 1000;
+      this.cooldownKnown = Number.isFinite(seconds) && seconds > 0;
+      this.liveMeta.clear();
       this.initializedAt = 0;
       this.cache.clear();
       this.pages.clear();
-      throw new ProviderError("EXNESS_RATE_LIMIT", 429, wait, {
-        upstreamStatus: response.status,
-        ...(Number(publicError?.code) === 1 ? { providerCode: 1 } : {}),
-      });
+      throw new ProviderError(
+        "EXNESS_RATE_LIMIT",
+        429,
+        Number.isFinite(seconds) && seconds > 0 ? wait : undefined,
+        {
+          rateLimitSource: "EXNESS_REST",
+          upstreamStatus: response.status,
+          ...(Number(publicError?.code) === 1 ? { providerCode: 1 } : {}),
+        },
+      );
     }
     if (!response.ok || publicError?.code !== undefined) {
       if (
@@ -384,14 +406,14 @@ export class ExnessReader {
     }
   }
   private async fetchLimits(signal: AbortSignal) {
-    const limits = limitsSchema.safeParse(
-      await this.get(
-        this.ap!,
-        `/v1/configuration/accounts/${this.config.accountId}/limits`,
-        signal,
-        "getLimits",
-      ),
+    const value = await this.get(
+      this.ap!,
+      `/v1/configuration/accounts/${this.config.accountId}/limits`,
+      signal,
+      "getLimits",
     );
+    this.limitsRaw = { at: this.now(), value };
+    const limits = limitsSchema.safeParse(value);
     if (!limits.success) throw new ProviderError("EXNESS_INVALID_RESPONSE");
     this.limits = limits.data.limits.rest;
   }
@@ -539,6 +561,22 @@ export class ExnessReader {
     return { success: true, stages, candleCount, ...diagnostics };
   }
   async prepareLive(symbol: string) {
+    const cached = this.liveMeta.get(symbol);
+    if (cached && this.now() - cached.at < 15000) return cached.value;
+    const pending = this.livePending.get(symbol);
+    if (pending) return pending;
+    const work = this.buildLive(symbol).then((value) => {
+      this.liveMeta.set(symbol, { at: this.now(), value });
+      return value;
+    });
+    this.livePending.set(symbol, work);
+    try {
+      return await work;
+    } finally {
+      this.livePending.delete(symbol);
+    }
+  }
+  private async buildLive(symbol: string) {
     const signal = AbortSignal.timeout(6500);
     return bounded(async () => {
       await this.initialize(signal);
@@ -567,12 +605,16 @@ export class ExnessReader {
         throw new ProviderError("BOOTSTRAP_FAILED");
       if (parsed.data.settings.trade_mode === "trading_disabled")
         throw new ProviderError("ACCOUNT_TRADE_MODE_DISABLED", 403);
-      const raw = await this.get(
-        this.ap!,
-        `/v1/configuration/accounts/${this.config.accountId}/limits`,
-        signal,
-        "getLimits",
-      );
+      const raw =
+        this.limitsRaw && this.now() - this.limitsRaw.at < 15000
+          ? this.limitsRaw.value
+          : await this.get(
+              this.ap!,
+              `/v1/configuration/accounts/${this.config.accountId}/limits`,
+              signal,
+              "getLimits",
+            );
+      this.limitsRaw = { at: this.now(), value: raw };
       const bucket = z.object({
         limit: z.number().int().positive(),
         window_seconds: z.number().positive(),

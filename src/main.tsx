@@ -1,3 +1,4 @@
+import type { RateInfo } from "./live-diagnostics";
 import { useLive } from "./use-live";
 import { updateBars } from "./live";
 import React, { useEffect, useRef, useState } from "react";
@@ -226,8 +227,11 @@ function App() {
   }
   const [liveAsk, setLiveAsk] = useState<number | undefined>();
   const [liveStatus, setLiveStatus] = useState("CONNECTING");
-  useLive(liveMode, symbol, Number(interval), feedEpoch, {
+  const [liveRate, setLiveRate] = useState<RateInfo>({});
+  const liveCooldown = useLive(liveMode, symbol, Number(interval), feedEpoch, {
+    rate: setLiveRate,
     basis: (id, bars) => {
+      setLiveRate({});
       setQuotes(emptyQuotes());
       setRobot(false);
       activateFeed({ kind: "EXNESS_LIVE", connectionId: id });
@@ -613,7 +617,14 @@ function App() {
           <div className="feed-warning" role="status">
             EXNESS LIVE · {liveStatus} · Bid/Ask broker; OHLC tick teramati,
             candle aktif parsial setelah reconnect.{" "}
-            <button onClick={() => setFeedEpoch((n) => n + 1)}>
+            {liveRate.rateLimitSource && (
+              <span> · {liveRate.rateLimitSource}</span>
+            )}
+            {liveCooldown > 0 && <span> · Cooldown {liveCooldown} detik</span>}
+            <button
+              disabled={liveCooldown > 0}
+              onClick={() => setFeedEpoch((n) => n + 1)}
+            >
               Hubungkan ulang manual
             </button>
           </div>

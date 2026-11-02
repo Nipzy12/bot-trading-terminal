@@ -14,6 +14,7 @@ import { generateKeyPairSync, randomBytes } from "node:crypto";
 import express from "express";
 import request from "supertest";
 import { accountRouter, csrf, type Identity } from "../server/accounts";
+import { LiveBootstrapCache } from "../server/live-cache";
 import { encrypt, decrypt } from "../server/vault";
 import { takeRate, type Database } from "../server/database";
 import { connectionStages } from "../server/connection-test";
@@ -495,6 +496,56 @@ describe("credential vault and private API", () => {
     expect(r.status).toBe(409);
     expect(r.body.error).toBe("CONNECTION_DELETED");
     expect(r.body.paperSource).toBeUndefined();
+  });
+  it("reuses encrypted bootstrap across instances without sharing owner/symbol data", async () => {
+    const a = new LiveBootstrapCache(),
+      b = new LiveBootstrapCache(),
+      build = vi.fn(async () => ({
+        prepared: { host: "private-host", path: "private-account" },
+        candles: [{ close: 1 }],
+      }));
+    const first = await a.reuse(db, "alice", "cache-id", "XAUUSD", 3600, build);
+    expect(
+      await b.reuse(db, "alice", "cache-id", "XAUUSD", 3600, build),
+    ).toEqual(first);
+    expect(build).toHaveBeenCalledTimes(1);
+    await b.reuse(db, "bob", "cache-id", "XAUUSD", 3600, build);
+    await a.reuse(db, "alice", "cache-id", "EURUSD", 3600, build);
+    expect(build).toHaveBeenCalledTimes(3);
+    const rows = await db.query(
+      "SELECT envelope FROM nexus_private.nexus_live_bootstrap",
+    );
+    expect(JSON.stringify(rows.rows)).not.toContain("private-host");
+  });
+  it("deduplicates in-flight bootstrap and gates another Vercel instance while loading", async () => {
+    const a = new LiveBootstrapCache(),
+      b = new LiveBootstrapCache();
+    let release!: (v: unknown) => void;
+    const build = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const first = a.reuse(db, "alice", "pending-id", "XAUUSD", 3600, build),
+      same = a.reuse(db, "alice", "pending-id", "XAUUSD", 3600, build);
+    await vi.waitFor(() => expect(build).toHaveBeenCalledTimes(1));
+    await expect(
+      b.reuse(db, "alice", "pending-id", "XAUUSD", 3600, build),
+    ).rejects.toMatchObject({
+      status: 429,
+      details: { rateLimitSource: "INTERNAL_PROVIDER_REST" },
+    });
+    release({ safe: true });
+    expect(await first).toEqual(await same);
+    await db.query(
+      "UPDATE nexus_private.nexus_live_bootstrap SET expires_at=now()-interval '1 second',lock_until=now()-interval '1 second'",
+    );
+    const fresh = vi.fn(async () => ({ safe: false }));
+    expect(
+      await b.reuse(db, "alice", "pending-id", "XAUUSD", 3600, fresh),
+    ).toEqual({ safe: false });
+    expect(fresh).toHaveBeenCalledTimes(1);
   });
   it("enforces one durable stream lease and allows recovery after TTL", async () => {
     const sql =
