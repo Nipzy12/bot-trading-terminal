@@ -363,7 +363,12 @@ describe("credential vault and private API", () => {
       "/api/account/backtest/history?symbol=XAUUSD&interval=3600&before=1700002800",
     );
     expect(result.status).toBe(200);
-    expect(historyPage).toHaveBeenCalledWith("XAUUSD", 3600, 1700002800);
+    expect(historyPage).toHaveBeenCalledWith(
+      "XAUUSD",
+      3600,
+      1700002800,
+      undefined,
+    );
     expect(result.body).toMatchObject({
       ...page,
       source: "exness",
@@ -400,6 +405,96 @@ describe("credential vault and private API", () => {
         )
       ).status,
     ).toBe(409);
+  });
+  it.each([
+    ["EXNESS_INVALID_TIME_RANGE", 3004, 400],
+    ["EXNESS_INVALID_COUNT", 3005, 422],
+    ["EXNESS_INVALID_LIMIT", 3006, 400],
+    ["EXNESS_DATA_UNAVAILABLE", 4004, 400],
+    ["TIMEOUT", undefined, 504],
+    ["EXNESS_RATE_LIMIT", undefined, 429],
+    ["HISTORY_LIMIT_REACHED", undefined, 416],
+    ["HISTORY_INTERNAL_FAILURE", undefined, 500],
+  ] as const)(
+    "returns structured safe backtest failure %s with progress",
+    async (code, providerCode, status) => {
+      const id = (await connect()).body.id;
+      await request(app())
+        .post(`/api/account/connections/${id}/test`)
+        .set(headers());
+      await request(app())
+        .post("/api/account/selection")
+        .set(headers())
+        .send({ id });
+      const failing = app({
+        reader: () => ({
+          testConnection: async () => ({ success: true, stages: [] }),
+          candles: async () => [],
+          historyPage: async () => {
+            if (code === "HISTORY_INTERNAL_FAILURE")
+              throw Error("secret key, private host and price");
+            throw new ProviderError(
+              code,
+              status,
+              code === "EXNESS_RATE_LIMIT" ? 60 : undefined,
+              {
+                providerCode,
+                upstreamStatus: status,
+                ...(code === "HISTORY_LIMIT_REACHED"
+                  ? { limitCause: "PROVIDER_AGE" as const }
+                  : {}),
+              },
+            );
+          },
+        }),
+      });
+      const r = await request(failing).get(
+        "/api/account/backtest/history?symbol=XAUUSD&interval=3600&pageIndex=5&loadedIntervals=720&validCandles=540",
+      );
+      expect(r.status).toBe(status);
+      expect(r.body).toMatchObject({
+        error: code === "EXNESS_RATE_LIMIT" ? "RATE_LIMITED" : code,
+        httpStatus: status,
+        paperSource: { kind: "EXNESS", connectionId: id },
+        diagnostic: { pageIndex: 5, loadedIntervals: 720, validCandles: 540 },
+      });
+      for (const forbidden of [
+        ...Object.values(secret),
+        "secret key, private host and price",
+      ])
+        expect(r.text).not.toContain(forbidden);
+      if (providerCode) expect(r.body.providerCode).toBe(providerCode);
+    },
+  );
+  it("revokes even an exhaustion error if selection changes during provider I/O", async () => {
+    const id = (await connect()).body.id;
+    await request(app())
+      .post(`/api/account/connections/${id}/test`)
+      .set(headers());
+    await request(app())
+      .post("/api/account/selection")
+      .set(headers())
+      .send({ id });
+    const failing = app({
+      reader: () => ({
+        testConnection: async () => ({ success: true, stages: [] }),
+        candles: async () => [],
+        historyPage: async () => {
+          await db.query("DELETE FROM nexus_selection WHERE user_id=$1", [
+            "alice",
+          ]);
+          throw new ProviderError("EXNESS_DATA_UNAVAILABLE", 400, undefined, {
+            providerCode: 4004,
+          });
+        },
+      }),
+    });
+    const r = await request(failing).get(
+      "/api/account/backtest/history?symbol=XAUUSD",
+    );
+    expect(r.status).toBe(409);
+    expect(r.body.error).toBe("CONNECTION_DELETED");
+    expect(r.body.paperSource).toBeUndefined();
   });
   it("enforces centralized atomic rate limits across independent application instances", async () => {
     const a = app(),

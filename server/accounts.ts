@@ -1,3 +1,4 @@
+import { historyFailure } from "./history-errors.js";
 import { historyQuery } from "./backtest-history.js";
 import express, { type Request } from "express";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
@@ -20,6 +21,7 @@ type Reader = {
     symbol: string,
     interval: number,
     before?: number,
+    windowIntervals?: number,
   ) => Promise<unknown>;
   candles: (symbol: string, interval: number) => Promise<unknown>;
 };
@@ -336,7 +338,13 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
       req.query,
     );
     if (!parsed.success) {
-      res.status(400).json({ error: "INVALID_MARKET" });
+      if (isHistory) {
+        const fail = historyFailure(
+          new ProviderError("INVALID_HISTORY_QUERY", 400),
+          req.query,
+        );
+        res.status(fail.status).json(fail.body);
+      } else res.status(400).json({ error: "INVALID_MARKET" });
       return;
     }
     const owner = (res.locals.identity as Identity).user.id;
@@ -354,19 +362,31 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
     const config = decrypt(row.envelope, owner, row.id) as Config;
     safeOrigin(config.gateway);
     const reader = deps.reader(config, owner, row.id);
-    const page = isHistory
-      ? await reader.historyPage?.(
+    let page: unknown, candles: unknown, failure: unknown;
+    let failed = false;
+    if (isHistory) {
+      try {
+        page = await reader.historyPage?.(
           parsed.data.symbol,
           Number(parsed.data.interval),
           "before" in parsed.data && typeof parsed.data.before === "number"
             ? parsed.data.before
             : undefined,
-        )
-      : undefined;
-    if (isHistory && !page) throw new ProviderError("HISTORY_UNAVAILABLE");
-    const candles = isHistory
-      ? undefined
-      : await reader.candles(parsed.data.symbol, Number(parsed.data.interval));
+          "windowIntervals" in parsed.data &&
+            typeof parsed.data.windowIntervals === "number"
+            ? parsed.data.windowIntervals
+            : undefined,
+        );
+        if (!page) throw new ProviderError("HISTORY_INTERNAL_FAILURE", 500);
+      } catch (error) {
+        failure = error;
+        failed = true;
+      }
+    } else
+      candles = await reader.candles(
+        parsed.data.symbol,
+        Number(parsed.data.interval),
+      );
     // Recheck ownership after network I/O so a concurrent disconnect revokes the response.
     const valid = await deps
       .db()
@@ -376,6 +396,16 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
       );
     if (!valid.rows.length) {
       res.status(409).json({ error: "CONNECTION_DELETED" });
+      return;
+    }
+    if (failed) {
+      const fail = historyFailure(failure, req.query);
+      if (failure instanceof ProviderError && failure.retryAfter)
+        res.set("Retry-After", String(failure.retryAfter));
+      res.status(fail.status).json({
+        ...fail.body,
+        paperSource: { kind: "EXNESS", connectionId: row.id },
+      });
       return;
     }
     res.json({
@@ -391,10 +421,17 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
   router.use(
     (
       error: unknown,
-      _req: express.Request,
+      req: express.Request,
       res: express.Response,
       _next: express.NextFunction,
     ) => {
+      if (req.path === "/backtest/history") {
+        const fail = historyFailure(error, req.query);
+        if (error instanceof ProviderError && error.retryAfter)
+          res.set("Retry-After", String(error.retryAfter));
+        res.status(fail.status).json(fail.body);
+        return;
+      }
       if (error instanceof ProviderError) {
         if (error.retryAfter) res.set("Retry-After", String(error.retryAfter));
         res

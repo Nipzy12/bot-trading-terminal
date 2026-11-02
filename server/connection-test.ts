@@ -50,7 +50,18 @@ export function safeFailure(error: unknown): {
   candleCount?: number;
   retryAfter?: number;
 } {
-  const candidate = error instanceof ProviderError ? error.code : "";
+  const raw = error instanceof ProviderError ? error.code : "";
+  const candidate =
+    raw === "EXNESS_DATA_UNAVAILABLE"
+      ? "EXNESS_MARKET_DATA"
+      : [
+            "EXNESS_INVALID_TIME_RANGE",
+            "EXNESS_INVALID_COUNT",
+            "EXNESS_INVALID_LIMIT",
+            "EXNESS_INVALID_CURSOR",
+          ].includes(raw)
+        ? "EXNESS_INVALID_RESPONSE"
+        : raw;
   const code =
     candidate === "EXNESS_RATE_LIMIT"
       ? "RATE_LIMITED"

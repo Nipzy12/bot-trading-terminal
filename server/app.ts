@@ -107,6 +107,8 @@ app.get("/api/backtest/history", (req, res) => {
         parsed.data.symbol,
         Number(parsed.data.interval),
         parsed.data.before,
+        undefined,
+        parsed.data.windowIntervals,
       ),
     );
   } catch {

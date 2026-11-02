@@ -8,7 +8,12 @@ import {
   type Segment,
   type BacktestSymbol,
 } from "./backtest";
-import { loadHistory } from "./backtest-loader";
+import {
+  loadHistory,
+  HistoryLoadError,
+  type HistoryLoadResult,
+} from "./backtest-loader";
+import { diagnosticText } from "./history-diagnostics";
 import { accountKey } from "./paper";
 import "./backtest.css";
 const money = (v: number) =>
@@ -114,6 +119,13 @@ const fields: { key: keyof Strategy; label: string; step?: string }[] = [
   { key: "capital", label: "Modal backtest (USD)" },
   { key: "trainPct", label: "In-sample (%)" },
 ];
+type PendingRun = {
+  history: HistoryLoadResult;
+  parameters: Strategy;
+  symbol: BacktestSymbol;
+  interval: number;
+  slots: number;
+};
 export function Backtest() {
   const [mode, setMode] = useState<"DEMO" | "EXNESS">("DEMO"),
     [symbol, setSymbol] = useState<BacktestSymbol>("XAUUSD"),
@@ -126,14 +138,46 @@ export function Backtest() {
     [result, setResult] = useState<BacktestResult | null>(null),
     [excluded, setExcluded] = useState(0);
   const [reports, setReports] = useState<BacktestResult[]>([]);
+  const [pending, setPending] = useState<PendingRun | null>(null);
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   function clear() {
     controller.current?.abort();
     setResult(null);
+    setPending(null);
     setError("");
     setBusy(false);
     setProgress(0);
+  }
+  function finish(run: PendingRun) {
+    const { history, parameters, symbol, interval, slots } = run;
+    const report = backtest(
+      history.bars,
+      symbol,
+      interval,
+      parameters,
+      history.source,
+    );
+    if (history.truncated && history.diagnostic)
+      report.warnings.unshift(
+        `SAMPEL TERPOTONG — ${diagnosticText(history.diagnostic)}. In-sample/out-of-sample dihitung ulang hanya dari data tersedia; jendela dan ukuran OOS lebih kecil, hasil tidak sebanding dengan permintaan penuh. Tidak ada candle buatan.`,
+      );
+    if (history.bars.length < slots)
+      report.warnings.push(
+        `Diperoleh ${history.bars.length} candle untuk permintaan ${slots} interval; ${history.loadedIntervals} interval kalender berhasil dimuat.`,
+      );
+    if (history.emptyWindows)
+      report.warnings.push(
+        `${history.emptyWindows} jendela historis kosong dicatat sebagai gap; tidak ada candle buatan.`,
+      );
+    if (history.source.kind === "EXNESS" && !history.historyAgeKnown)
+      report.warnings.push(
+        "Batas usia history tidak diberikan provider. Ketersediaan riwayat tidak dijamin dan tidak diasumsikan 365 hari.",
+      );
+    setResult(report);
+    setExcluded(history.excluded);
+    setReports((previous) => [report, ...previous].slice(0, 8));
+    setPending(null);
   }
   async function run() {
     const parsed = strategySchema.safeParse(params);
@@ -147,6 +191,7 @@ export function Backtest() {
     const c = new AbortController();
     controller.current = c;
     setBusy(true);
+    setPending(null);
     setError("");
     setResult(null);
     setProgress(0);
@@ -162,27 +207,19 @@ export function Backtest() {
         },
       );
       if (c.signal.aborted) return;
-      const report = backtest(
-        history.bars,
-        symbol,
-        interval,
-        parsed.data,
-        history.source,
-      );
-      if (history.bars.length < slots)
-        report.warnings.push(
-          `Diperoleh ${history.bars.length} candle untuk ${slots} interval kalender; gap atau batas history dapat mengurangi jumlah.`,
-        );
-      if (history.emptyWindows)
-        report.warnings.push(
-          `${history.emptyWindows} jendela historis kosong dilaporkan sebagai gap; tidak ada harga atau candle yang dibuat.`,
-        );
-      setResult(report);
-      setExcluded(history.excluded);
-      setReports((previous) => [report, ...previous].slice(0, 8));
+      const run = { history, parameters: parsed.data, symbol, interval, slots };
+      if (history.truncated) {
+        setPending(run);
+        return;
+      }
+      finish(run);
     } catch (e) {
       if (!c.signal.aborted)
-        setError(e instanceof Error ? e.message : "BACKTEST_FAILED");
+        setError(
+          e instanceof HistoryLoadError
+            ? diagnosticText(e.diagnostic)
+            : "HISTORY_INTERNAL_FAILURE",
+        );
     } finally {
       if (controller.current === c) setBusy(false);
     }
@@ -302,6 +339,8 @@ export function Backtest() {
                 disabled={busy}
                 onChange={(e) => {
                   setResult(null);
+                  setPending(null);
+                  setError("");
                   setParams((p) => ({ ...p, [f.key]: Number(e.target.value) }));
                 }}
               />
@@ -348,6 +387,25 @@ export function Backtest() {
             proses tanpa retry otomatis.
           </p>
         )}
+        {pending && (
+          <div className="bt-warning" role="alert">
+            <strong>
+              {pending.history.diagnostic
+                ? diagnosticText(pending.history.diagnostic)
+                : "HISTORY_LIMIT_REACHED"}
+            </strong>
+            <p>
+              SAMPEL TERPOTONG. Permintaan {pending.slots} interval tidak
+              selesai. Hanya {pending.history.bars.length} candle valid
+              tersedia. In-sample/out-of-sample akan dihitung ulang dari sampel
+              yang lebih kecil; keterbatasan OOS tetap berlaku. Tidak ada candle
+              sintetis ditambahkan.
+            </p>
+            <button className="submit-order" onClick={() => finish(pending)}>
+              Gunakan sampel tersedia (terpotong)
+            </button>
+          </div>
+        )}
         {error && (
           <p role="alert" className="red">
             {error}
@@ -389,8 +447,11 @@ export function Backtest() {
           </p>
           {reports.map((r, i) => (
             <p key={i}>
-              {accountKey(r.source)} · {r.symbol} · {r.barCount} candle · OOS{" "}
-              {money(r.outSample.net)}
+              {accountKey(r.source)} · {r.symbol} · {r.barCount} candle ·{" "}
+              {r.warnings.some((w) => w.startsWith("SAMPEL TERPOTONG"))
+                ? "SAMPEL TERPOTONG · "
+                : ""}
+              OOS {money(r.outSample.net)}
             </p>
           ))}
         </section>

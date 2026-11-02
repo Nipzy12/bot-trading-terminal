@@ -4,6 +4,10 @@ export const historyQuery = z
   .object({
     symbol: z.enum(["XAUUSD", "EURUSD", "BTCUSD"]),
     interval: z.enum(["300", "900", "3600", "14400", "86400"]).default("3600"),
+    windowIntervals: z.coerce.number().int().min(1).max(180).optional(),
+    pageIndex: z.coerce.number().int().min(1).max(12).optional(),
+    loadedIntervals: z.coerce.number().int().min(0).max(2160).optional(),
+    validCandles: z.coerce.number().int().min(0).max(2160).optional(),
     before: z.coerce.number().int().positive().max(8640000000000).optional(),
   })
   .strict();
@@ -12,13 +16,14 @@ export function demoHistory(
   interval: number,
   before?: number,
   now = Date.now() / 1000,
+  windowIntervals = 180,
 ) {
   const current = Math.floor(now / interval) * interval;
   const to = before ?? current;
   const earliest = Math.ceil((now - 365 * 86400) / interval) * interval;
   if (to > current || to % interval || to <= earliest)
     throw Error("INVALID_HISTORY_WINDOW");
-  const from = Math.max(earliest, to - 180 * interval),
+  const from = Math.max(earliest, to - windowIntervals * interval),
     base = bases[symbol];
   const price = (t: number) =>
     base *

@@ -136,6 +136,8 @@ type Candle = z.infer<typeof candleSchema>;
 const iso = z.iso.datetime({ offset: true });
 export type HistoryPage = {
   emptyWindow: boolean;
+  historyAgeKnown?: boolean;
+  limitCause?: "PROVIDER_AGE" | "CURSOR_FLOOR";
   candles: Candle[];
   window: { from: number; to: number };
   nextBefore: number | null;
@@ -266,6 +268,7 @@ export class ExnessReader {
       | undefined;
     if (
       response.status === 429 ||
+      Number(publicError?.code) === 1 ||
       publicError?.code === 3015 ||
       publicError?.error_message === "REQUEST_RATE_LIMIT"
     ) {
@@ -283,27 +286,61 @@ export class ExnessReader {
       this.initializedAt = 0;
       this.cache.clear();
       this.pages.clear();
-      throw new ProviderError("EXNESS_RATE_LIMIT", 429, wait);
+      throw new ProviderError("EXNESS_RATE_LIMIT", 429, wait, {
+        upstreamStatus: response.status,
+        ...(Number(publicError?.code) === 1 ? { providerCode: 1 } : {}),
+      });
     }
     if (!response.ok || publicError?.code !== undefined) {
       if (
         response.status === 401 ||
         [1000, 1001].includes(Number(publicError?.code))
       )
-        throw new ProviderError("EXNESS_AUTH");
+        throw new ProviderError("EXNESS_AUTH", 401, undefined, {
+          upstreamStatus: response.status,
+        });
       if (
         response.status === 403 ||
         [1002, 2001, 2002].includes(Number(publicError?.code))
       )
-        throw new ProviderError("EXNESS_PERMISSION");
-      if ([4000, 4004].includes(Number(publicError?.code)))
-        throw new ProviderError("EXNESS_MARKET_DATA");
+        throw new ProviderError("EXNESS_PERMISSION", 403, undefined, {
+          upstreamStatus: response.status,
+        });
+      const providerCode = Number(publicError?.code);
+      const categories: Record<number, string> = {
+        2: "EXNESS_UPSTREAM",
+        3: "EXNESS_INTERNAL_FAILURE",
+        3004: "EXNESS_INVALID_TIME_RANGE",
+        3005: "EXNESS_INVALID_COUNT",
+        3006: "EXNESS_INVALID_LIMIT",
+        3007: "EXNESS_INVALID_CURSOR",
+        4000: "EXNESS_MARKET_DATA",
+        4004: "EXNESS_DATA_UNAVAILABLE",
+      };
+      if (categories[providerCode])
+        throw new ProviderError(
+          categories[providerCode],
+          response.status >= 400
+            ? response.status
+            : providerCode === 2
+              ? 503
+              : providerCode === 3
+                ? 502
+                : 422,
+          undefined,
+          { providerCode, upstreamStatus: response.status },
+        );
       if (response.status === 404) {
         this.ap = undefined;
         this.instruments = undefined;
         this.initializedAt = 0;
       }
-      throw new ProviderError("EXNESS_UPSTREAM");
+      throw new ProviderError(
+        "EXNESS_UPSTREAM",
+        response.status >= 500 ? response.status : 502,
+        undefined,
+        { upstreamStatus: response.status },
+      );
     }
     return body;
   }
@@ -356,7 +393,7 @@ export class ExnessReader {
     if (!limits.success) throw new ProviderError("EXNESS_INVALID_RESPONSE");
     this.limits = limits.data.limits.rest;
   }
-  private historyWindow(interval: number) {
+  private historyConstraints() {
     const method = this.limits!.methods.find(
       (m) =>
         m.api_operation_id === "getCandleHistory" &&
@@ -366,7 +403,15 @@ export class ExnessReader {
     const shape = constraints.safeParse(method?.limits);
     if (!method || !shape.success)
       throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
-    return closedHistoryWindow(this.now() / 1000, interval, shape.data);
+    return shape.data;
+  }
+
+  private historyWindow(interval: number) {
+    return closedHistoryWindow(
+      this.now() / 1000,
+      interval,
+      this.historyConstraints(),
+    );
   }
 
   private async accountInstrument(symbol: string, signal: AbortSignal) {
@@ -495,6 +540,7 @@ export class ExnessReader {
     symbol: string,
     interval: number,
     before?: number,
+    windowIntervals = 180,
   ): Promise<HistoryPage> {
     if (
       !["XAUUSD", "EURUSD", "BTCUSD"].includes(symbol) ||
@@ -505,24 +551,37 @@ export class ExnessReader {
     return bounded(async () => {
       await this.initialize(signal);
       const instrument = await this.accountInstrument(symbol, signal);
-      const base = this.historyWindow(interval);
-      const method = this.limits!.methods.find(
-        (m) => m.api_operation_id === "getCandleHistory",
-      );
-      const age = constraints.parse(method!.limits).history_age_days ?? 365;
-      const earliest =
-        Math.ceil((this.now() / 1000 - Math.min(age, 365) * 86400) / interval) *
-        interval;
-      const to = before ?? base.to;
       if (
-        !Number.isSafeInteger(to) ||
-        to % interval ||
-        to > base.to ||
-        to <= earliest
+        !Number.isInteger(windowIntervals) ||
+        windowIntervals < 1 ||
+        windowIntervals > 180
       )
         throw new ProviderError("EXNESS_HISTORY_WINDOW", 400);
-      const from = Math.max(earliest, to - base.max * interval);
-      const window = { from, to, interval, requestedAt: base.requestedAt };
+      const limits = this.historyConstraints();
+      const requestedAt = this.now() / 1000;
+      const current = Math.floor(requestedAt / interval) * interval;
+      const age = limits.history_age_days;
+      // Missing history_age_days means unknown availability, never an invented 365-day guarantee.
+      const earliest =
+        age === undefined
+          ? interval
+          : Math.ceil((requestedAt - age * 86400) / interval) * interval;
+      let capacity = Math.min(windowIntervals, limits.max_candles_per_request);
+      if (limits.history_range_days !== undefined)
+        capacity = Math.min(
+          capacity,
+          Math.floor((limits.history_range_days * 86400) / interval),
+        );
+      if (capacity < 1) throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
+      const to = before ?? current;
+      if (!Number.isSafeInteger(to) || to % interval || to > current || to <= 0)
+        throw new ProviderError("EXNESS_HISTORY_WINDOW", 400);
+      const from = Math.max(earliest, to - capacity * interval);
+      if (from >= to)
+        throw new ProviderError("HISTORY_LIMIT_REACHED", 416, undefined, {
+          limitCause: age === undefined ? "CURSOR_FLOOR" : "PROVIDER_AGE",
+        });
+      const window = { from, to, interval, requestedAt };
       const key = `${symbol}:${interval}:${from}:${to}`;
       const cached = this.pages.get(key);
       if (cached && this.now() - cached.at < 120000) return cached.page;
@@ -553,6 +612,15 @@ export class ExnessReader {
           : normalizeHistory(body, (to - from) / interval, window, diagnostics);
         const page = {
           emptyWindow,
+          historyAgeKnown: age !== undefined,
+          ...(from <= earliest
+            ? {
+                limitCause:
+                  age === undefined
+                    ? ("CURSOR_FLOOR" as const)
+                    : ("PROVIDER_AGE" as const),
+              }
+            : {}),
           candles,
           window: { from, to },
           nextBefore: from > earliest ? from : null,
