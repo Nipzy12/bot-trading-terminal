@@ -16,7 +16,8 @@
     "format": "prettier --write src server tests scripts vite.config.ts",
     "db:migrate": "node scripts/migrate.mjs",
     "vercel-build": "node scripts/prepare-db.mjs && npm run build",
-    "test:accounts:browser": "node scripts/verify-accounts.mjs"
+    "test:accounts:browser": "node scripts/verify-accounts.mjs",
+    "test:paper:browser": "node scripts/verify-paper-sources.mjs"
   },
   "repository": {
     "type": "git",

@@ -119,10 +119,11 @@ try {
   );
   // Persist a real daily-loss record to verify startup risk blocking in the UI.
   await page.evaluate(() => {
-    const a = JSON.parse(localStorage.getItem("nexus.paper.v1"));
+    const book = JSON.parse(localStorage.getItem("nexus.paper.v2"));
+    const a = book.accounts.find((a) => a.source.kind === "DEMO");
     a.history[0].pnl = -150;
     a.history[0].closedAt = Date.now();
-    localStorage.setItem("nexus.paper.v1", JSON.stringify(a));
+    localStorage.setItem("nexus.paper.v2", JSON.stringify(book));
   });
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.getByText("Robot terkunci", { exact: false }).waitFor();
@@ -139,7 +140,7 @@ try {
   providerPage.on("pageerror", (e) => errors.push(e.message));
   let mode = "rate",
     requests = 0;
-  await providerPage.route("**/api/market?**", async (route) => {
+  await providerPage.route("**/api/account/market?**", async (route) => {
     requests++;
     if (mode === "rate") {
       await route.fulfill({
@@ -152,6 +153,10 @@ try {
     await route.fulfill({
       json: {
         source: "exness",
+        paperSource: {
+          kind: "EXNESS",
+          connectionId: "11111111-1111-4111-8111-111111111111",
+        },
         label: "EXNESS",
         kind: "candle-history",
         live: false,
@@ -165,9 +170,12 @@ try {
       },
     });
   });
-  await providerPage.goto(process.env.BASE_URL || "http://localhost:5173", {
-    waitUntil: "domcontentloaded",
-  });
+  await providerPage.goto(
+    (process.env.BASE_URL || "http://localhost:5173") + "/?feed=exness",
+    {
+      waitUntil: "domcontentloaded",
+    },
+  );
   await providerPage.getByRole("alert").waitFor();
   await providerPage.waitForTimeout(1000);
   const initialRequests = requests;

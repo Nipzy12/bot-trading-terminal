@@ -1684,3 +1684,46 @@ main {
   white-space: nowrap;
   font-size: 11px;
 }
+
+.paper-switch {
+  margin: 0 24px 16px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.paper-switch select {
+  background: #171e2b;
+  color: #e5ebf5;
+  border: 1px solid #384357;
+  padding: 10px;
+  border-radius: 6px;
+  max-width: 100%;
+}
+.paper-switch a {
+  color: #71b5ff;
+  font-size: 12px;
+}
+.paper-switch p {
+  flex-basis: 100%;
+  margin: 0;
+  color: #a6b4c9;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 700px) {
+  .paper-switch {
+    margin: 0 12px 12px;
+  }
+  .paper-switch label {
+    width: 100%;
+  }
+}
+
+.toast {
+  pointer-events: none;
+}
+.toast button {
+  pointer-events: auto;
+}

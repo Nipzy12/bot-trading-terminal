@@ -11,9 +11,14 @@ import {
   validStops,
   type Position,
 } from "../src/paper";
+const q = (price?: number, symbol = "XAUUSD") => ({
+  accountKey: "DEMO",
+  prices: price === undefined ? {} : { [symbol]: price },
+});
 const now = Date.UTC(2026, 10, 2, 12);
 const position = (extra: Partial<Position> = {}): Position => ({
   id: "one",
+  accountKey: "DEMO",
   symbol: "XAUUSD",
   side: "Buy",
   size: 0.1,
@@ -34,18 +39,24 @@ describe("paper account and risk engine", () => {
       expect(restore(raw)).toEqual(fresh());
   });
   it("calculates buy/sell USD P&L with explicit contract sizes and JPY conversion", () => {
-    expect(pnl(position(), 2702)).toBe(20);
-    expect(pnl(position({ side: "Sell" }), 2702)).toBe(-20);
+    expect(pnl(position(), q(2702))).toBe(20);
+    expect(pnl(position({ side: "Sell" }), q(2702))).toBe(-20);
     expect(
-      pnl(position({ symbol: "EURUSD", entry: 1.1, size: 1 }), 1.101),
+      pnl(
+        position({ symbol: "EURUSD", entry: 1.1, size: 1 }),
+        q(1.101, "EURUSD"),
+      ),
     ).toBeCloseTo(100);
     expect(
-      pnl(position({ symbol: "USDJPY", entry: 150, size: 1 }), 151),
+      pnl(
+        position({ symbol: "USDJPY", entry: 150, size: 1 }),
+        q(151, "USDJPY"),
+      ),
     ).toBeCloseTo(100000 / 151);
   });
   it("closes once, records exit and realized P&L and survives reload", () => {
     const a = { ...fresh(), positions: [position()] };
-    const b = close(a, "one", { XAUUSD: 2698 }, "Manual", now);
+    const b = close(a, "one", q(2698), "Manual", now);
     expect(b.positions).toHaveLength(0);
     expect(b.history[0]).toMatchObject({
       exit: 2698,
@@ -53,7 +64,7 @@ describe("paper account and risk engine", () => {
       reason: "Manual",
       closedAt: now,
     });
-    expect(close(b, "one", { XAUUSD: 2698 })).toBe(b);
+    expect(close(b, "one", q(2698))).toBe(b);
     expect(restore(JSON.stringify(b))).toEqual(b);
   });
   it.each([
@@ -67,27 +78,27 @@ describe("paper account and risk engine", () => {
       sl: side === "Buy" ? 2699 : 2701,
       tp: side === "Buy" ? 2701 : 2699,
     });
-    const b = settle({ ...fresh(), positions: [p] }, { XAUUSD: price }, now);
+    const b = settle({ ...fresh(), positions: [p] }, q(price), now);
     expect(b.positions).toHaveLength(0);
     expect(b.history[0].reason).toBe(reason);
     expect(b.history[0].exit).toBe(price);
   });
   it("ignores missing quotes and queues emergency exits until a quote arrives", () => {
     const a = { ...fresh(), emergency: true, positions: [position()] };
-    expect(settle(a, {}, now).positions).toHaveLength(1);
-    const b = settle(a, { XAUUSD: 2700 }, now);
+    expect(settle(a, q(), now).positions).toHaveLength(1);
+    const b = settle(a, q(2700), now);
     expect(b.positions).toHaveLength(0);
     expect(b.history[0].reason).toBe("Emergency");
-    expect(blocked(b, {}, now)).toBe(true);
+    expect(blocked(b, q(), now)).toBe(true);
   });
   it("latches daily gross loss including floating, gains do not offset and next UTC day unlocks", () => {
     let a = { ...fresh(), dailyLimit: 50, positions: [position()] };
-    a = settle(a, { XAUUSD: 2694 }, now);
-    expect(dailyLoss(a, { XAUUSD: 2694 }, now)).toBeCloseTo(60);
+    a = settle(a, q(2694), now);
+    expect(dailyLoss(a, q(2694), now)).toBeCloseTo(60);
     expect(a.haltDay).toBe(day(now));
-    expect(blocked(a, { XAUUSD: 2702 }, now)).toBe(true);
-    a = close(a, "one", { XAUUSD: 2694 }, "Manual", now);
-    expect(blocked(a, {}, now + 86400000)).toBe(false);
+    expect(blocked(a, q(2702), now)).toBe(true);
+    a = close(a, "one", q(2694), "Manual", now);
+    expect(blocked(a, q(), now + 86400000)).toBe(false);
   });
   it("checks stops against both sides", () => {
     expect(validStops("Buy", 100, 90, 110)).toBe(true);

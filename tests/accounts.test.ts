@@ -263,10 +263,12 @@ describe("credential vault and private API", () => {
     const data = await request(app()).get("/api/account/market?symbol=XAUUSD");
     expect(data.body).toMatchObject({
       source: "exness",
+      paperSource: { kind: "EXNESS", connectionId: id },
       label: "EXNESS",
       live: false,
     });
-    expect(data.text).not.toContain(secret.apiKey);
+    for (const value of Object.values(secret))
+      expect(data.text).not.toContain(value);
     expect(
       (
         await request(app())
@@ -305,6 +307,33 @@ describe("credential vault and private API", () => {
     const r = await request(racing).get("/api/account/market?symbol=XAUUSD");
     expect(r.status).toBe(409);
     expect(r.body).toEqual({ error: "CONNECTION_DELETED" });
+  });
+  it("rejects an old connection response when selection changes during provider I/O", async () => {
+    const id = (await connect()).body.id;
+    const second = (await connect()).body.id;
+    for (const key of [id, second])
+      await request(app())
+        .post(`/api/account/connections/${key}/test`)
+        .set(headers());
+    await request(app())
+      .post("/api/account/selection")
+      .set(headers())
+      .send({ id });
+    const racing = app({
+      reader: () => ({
+        testConnection: async () => ({ success: true, stages: [] }),
+        candles: async () => {
+          await db.query(
+            "UPDATE nexus_selection SET credential_id=$1 WHERE user_id=$2",
+            [second, "alice"],
+          );
+          return [];
+        },
+      }),
+    });
+    expect(
+      (await request(racing).get("/api/account/market?symbol=XAUUSD")).status,
+    ).toBe(409);
   });
   it("enforces centralized atomic rate limits across independent application instances", async () => {
     const a = app(),

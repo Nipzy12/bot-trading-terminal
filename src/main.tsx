@@ -37,7 +37,19 @@ const marketPath =
 import {
   STORAGE_KEY,
   fresh,
-  restore,
+  restoreBook,
+  LEGACY_STORAGE_KEY,
+  DEMO,
+  accountKey,
+  marketSource,
+  ensureAccount,
+  emptyQuotes,
+  mark,
+  openPosition,
+  robotStep,
+  valuation,
+  type PaperSource,
+  type PaperBook,
   pnl,
   close,
   settle,
@@ -132,14 +144,23 @@ function App() {
     [loading, setLoading] = useState(true),
     [side, setSide] = useState<"Buy" | "Sell">("Buy"),
     [size, setSize] = useState("0.01"),
-    [account, setAccount] = useState<Account>(() => {
+    [book, setBook] = useState<PaperBook>(() => {
       try {
-        return restore(localStorage.getItem(STORAGE_KEY));
+        return restoreBook(
+          localStorage.getItem(STORAGE_KEY),
+          localStorage.getItem(LEGACY_STORAGE_KEY),
+        );
       } catch {
-        return fresh();
+        return { version: 2, accounts: [fresh()] };
       }
     }),
-    [quotes, setQuotes] = useState<Quotes>({}),
+    [activeKey, setActiveKey] = useState<string | null>(
+      marketPath === "/api/market" ? "DEMO" : null,
+    ),
+    [feedSource, setFeedSource] = useState<PaperSource | null>(
+      marketPath === "/api/market" ? DEMO : null,
+    ),
+    [quotes, setQuotes] = useState<Quotes>(emptyQuotes()),
     [storageError, setStorageError] = useState(false),
     [sl, setSl] = useState(""),
     [tp, setTp] = useState(""),
@@ -147,11 +168,37 @@ function App() {
     [tab, setTab] = useState("Posisi"),
     [notice, setNotice] = useState(""),
     [search, setSearch] = useState("");
+  const account =
+    book.accounts.find((a) => accountKey(a.source) === activeKey) ?? fresh();
+  const feedKey = feedSource ? accountKey(feedSource) : "";
+  const accountLabel =
+    account.source.kind === "DEMO"
+      ? "DEMO"
+      : `EXNESS · ${account.source.connectionId.slice(0, 8)}`;
+  const matchingFeed = activeKey !== null && activeKey === feedKey;
+  function setAccount(update: (a: Account) => Account) {
+    setBook((b) => ({
+      ...b,
+      accounts: b.accounts.map((a) =>
+        accountKey(a.source) === activeKey ? update(a) : a,
+      ),
+    }));
+  }
+  function activateFeed(next: PaperSource) {
+    const key = accountKey(next);
+    setBook((b) => ensureAccount(b, next));
+    if (!feedSource || accountKey(feedSource) !== key) {
+      setRobot(false);
+      setQuotes(emptyQuotes());
+      setActiveKey(key);
+    }
+    setFeedSource(next);
+  }
   const paused = useRef(false);
   function pauseFeed(seconds: number) {
     paused.current = true;
     setRobot(false);
-    setQuotes({});
+    setQuotes(emptyQuotes());
     setFeedPause(
       `EXNESS rate limit. Tunggu ${seconds} detik sebelum mencoba lagi secara manual.`,
     );
@@ -164,33 +211,39 @@ function App() {
         : "DEMO";
   const { positions, history } = account;
   const riskBlocked = blocked(account, quotes);
-  const floating = positions.reduce(
-    (sum, p) => sum + (quotes[p.symbol] ? pnl(p, quotes[p.symbol]) : 0),
-    0,
-  );
-  const realized = history.reduce((sum, p) => sum + p.pnl, 0);
+  const { floating, realized, equity } = valuation(account, quotes);
+  const loss = dailyLoss(account, quotes);
+  const orderPrice =
+    quotes.accountKey === activeKey && matchingFeed
+      ? quotes.prices[symbol]
+      : undefined;
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(account));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(book));
       setStorageError(false);
     } catch {
       setStorageError(true);
     }
-  }, [account]);
+  }, [book]);
   useEffect(() => {
     setAccount((a) => settle(a, quotes));
-  }, [quotes]);
+  }, [quotes, activeKey]);
   useEffect(() => {
-    if (riskBlocked) setRobot(false);
-  }, [riskBlocked]);
-  const quoteSymbols = [...new Set([symbol, ...positions.map((p) => p.symbol)])]
+    if (riskBlocked || !matchingFeed) setRobot(false);
+  }, [riskBlocked, activeKey, feedKey]);
+  const quoteSymbols = [
+    ...new Set([
+      symbol,
+      ...(matchingFeed ? positions.map((p) => p.symbol) : []),
+    ]),
+  ]
     .sort()
     .join(",");
   useEffect(() => {
     const controller = new AbortController();
     let refreshing = false;
     async function refresh() {
-      if (refreshing || paused.current) return;
+      if (refreshing || paused.current || !feedKey) return;
       refreshing = true;
       await Promise.all(
         quoteSymbols.split(",").map(async (instrument) => {
@@ -211,6 +264,20 @@ function App() {
             }
             if (!response.ok) throw Error("Quote unavailable");
             const feed = await response.json();
+            const identity = marketSource(
+              feed,
+              marketPath === "/api/market" ? "DEMO" : "EXNESS",
+            );
+            if (accountKey(identity) !== feedKey) {
+              if (!controller.signal.aborted) {
+                setError(
+                  "Koneksi feed berubah. Muat ulang chart; akun paper lama tetap tersimpan.",
+                );
+                setQuotes(emptyQuotes());
+                setRobot(false);
+              }
+              throw Error("Feed identity changed");
+            }
             const last = feed.candles.at(-1)?.close;
             if (!Number.isFinite(last) || last <= 0)
               throw Error("Invalid quote");
@@ -219,13 +286,19 @@ function App() {
                 ? last * (1 + Math.sin(Date.now() / 15000) * 0.00015)
                 : last;
             if (!controller.signal.aborted && !paused.current)
-              setQuotes((q) => ({ ...q, [instrument]: mark }));
+              setQuotes((q) => ({
+                accountKey: feedKey,
+                prices: {
+                  ...(q.accountKey === feedKey ? q.prices : {}),
+                  [instrument]: mark,
+                },
+              }));
           } catch {
             if (!controller.signal.aborted) {
               setQuotes((q) => {
-                const next = { ...q };
-                delete next[instrument];
-                return next;
+                const prices = { ...q.prices };
+                delete prices[instrument];
+                return { ...q, prices };
               });
               setRobot(false);
             }
@@ -240,9 +313,11 @@ function App() {
       controller.abort();
       clearInterval(timer);
     };
-  }, [quoteSymbols, feedEpoch]);
+  }, [quoteSymbols, feedEpoch, feedKey]);
   const current = markets.find((m) => m.symbol === symbol)!;
-  const price = quotes[symbol] ?? data.at(-1)?.close ?? current.price;
+  const price =
+    (quotes.accountKey === feedKey ? quotes.prices[symbol] : undefined) ??
+    data.at(-1)?.close;
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true);
@@ -263,6 +338,12 @@ function App() {
         return r.json();
       })
       .then((d) => {
+        if (controller.signal.aborted) return;
+        const identity = marketSource(
+          d,
+          marketPath === "/api/market" ? "DEMO" : "EXNESS",
+        );
+        activateFeed(identity);
         setData(d.candles);
         setSource(d.source);
       })
@@ -288,8 +369,8 @@ function App() {
     const stop = sl === "" ? undefined : Number(sl),
       take = tp === "" ? undefined : Number(tp);
     if (
-      !quotes[symbol] ||
-      !validStops(orderSide, price, stop, take) ||
+      !orderPrice ||
+      !validStops(orderSide, orderPrice ?? 0, stop, take) ||
       (stop !== undefined && (!Number.isFinite(stop) || stop <= 0)) ||
       (take !== undefined && (!Number.isFinite(take) || take <= 0))
     ) {
@@ -298,57 +379,66 @@ function App() {
       );
       return;
     }
+    if (!matchingFeed || loading || error || feedPause || riskBlocked) return;
     setAccount((a) =>
-      a.emergency || a.positions.length >= 100
-        ? a
-        : {
-            ...a,
-            positions: [
-              ...a.positions,
-              {
-                id: crypto.randomUUID(),
-                symbol,
-                side: orderSide,
-                size: volume,
-                entry: price,
-                openedAt: Date.now(),
-                sl: stop,
-                tp: take,
-              },
-            ],
-          },
+      openPosition(a, quotes, {
+        id: crypto.randomUUID(),
+        symbol,
+        side: orderSide,
+        size: volume,
+        openedAt: Date.now(),
+        sl: stop,
+        tp: take,
+      }),
     );
     setNotice(`Order ${orderSide} simulasi berhasil dibuat.`);
   }
-  const robotContext = useRef({ quotes, price });
-  robotContext.current = { quotes, price };
+  const robotContext = useRef({ quotes, activeKey, feedKey });
+  robotContext.current = { quotes, activeKey, feedKey };
   useEffect(() => {
-    if (!robot || riskBlocked || loading || error || !quotes[symbol]) return;
+    if (
+      !robot ||
+      riskBlocked ||
+      !matchingFeed ||
+      loading ||
+      error ||
+      feedPause ||
+      !orderPrice
+    )
+      return;
+    const key = activeKey;
     const timer = window.setInterval(() => {
-      if (data.length < 20) return;
-      const avg = data.slice(-20).reduce((s, c) => s + c.close, 0) / 20;
-      const { quotes, price } = robotContext.current;
+      const context = robotContext.current;
+      if (
+        data.length < 20 ||
+        context.activeKey !== key ||
+        context.feedKey !== key ||
+        context.quotes.accountKey !== key
+      )
+        return;
+      const average = data.slice(-20).reduce((sum, c) => sum + c.close, 0) / 20;
       setAccount((a) =>
-        !quotes[symbol] || blocked(a, quotes) || a.positions.length >= 3
-          ? a
-          : {
-              ...a,
-              positions: [
-                ...a.positions,
-                {
-                  id: crypto.randomUUID(),
-                  symbol,
-                  side: price > avg ? "Buy" : "Sell",
-                  size: 0.01,
-                  entry: price,
-                  openedAt: Date.now(),
-                },
-              ],
-            },
+        robotStep(
+          a,
+          context.quotes,
+          symbol,
+          { accountKey: context.feedKey, average },
+          crypto.randomUUID(),
+        ),
       );
     }, 10000);
     return () => clearInterval(timer);
-  }, [robot, riskBlocked, data, symbol, loading, error]);
+  }, [
+    robot,
+    riskBlocked,
+    data,
+    symbol,
+    loading,
+    error,
+    feedPause,
+    activeKey,
+    feedKey,
+  ]);
   function emergency() {
     setRobot(false);
     setAccount((a) => settle({ ...a, emergency: true }, quotes));
@@ -467,7 +557,9 @@ function App() {
               Saldo virtual <Wallet size={13} />
             </span>
             <strong>${fmt(10000 + realized)}</strong>
-            <small>Akun demo · USD · Realized ${fmt(realized)}</small>
+            <small>
+              {accountLabel} · USD · Realized ${fmt(realized)}
+            </small>
           </div>
           <div className="metric">
             <span>Posisi terbuka</span>
@@ -485,14 +577,46 @@ function App() {
                 Paper trading <i />
               </strong>
             </div>
-            <span className="muted">DEMO</span>
+            <span className="muted">{accountLabel}</span>
           </div>
         </section>
-        <section className="ticker">
+        <section className="paper-switch panel" aria-label="Akun paper trading">
+          <label htmlFor="paper-account">Akun paper terpisah</label>
+          <select
+            id="paper-account"
+            value={activeKey ?? ""}
+            onChange={(e) => {
+              setRobot(false);
+              setActiveKey(e.target.value);
+              setSl("");
+              setTp("");
+            }}
+          >
+            {activeKey === null && (
+              <option value="">Menunggu identitas EXNESS…</option>
+            )}
+            {book.accounts.map((a) => (
+              <option key={accountKey(a.source)} value={accountKey(a.source)}>
+                {a.source.kind === "DEMO"
+                  ? "DEMO"
+                  : `EXNESS · ${a.source.connectionId.slice(0, 8)}`}{" "}
+                · {a.positions.length} posisi
+              </option>
+            ))}
+          </select>
+          <a href="/">Feed DEMO</a>
+          <a href="/?feed=exness">Feed EXNESS history</a>
+          <p role="status">
+            {!matchingFeed
+              ? "Feed berbeda / belum terverifikasi: penilaian, SL/TP, penutupan dan robot akun ini ditangguhkan. Posisi tetap tersimpan."
+              : `${accountLabel} · ${account.source.kind === "EXNESS" ? "Mark candle historis M5, bukan tick real-time" : "Harga simulasi DEMO"}`}
+          </p>
+        </section>
+        <section className="ticker" aria-label="Snapshot DEMO">
           {markets.slice(0, 5).map((m) => (
             <button key={m.symbol} onClick={() => setSymbol(m.symbol)}>
               <span>
-                {m.symbol}{" "}
+                {m.symbol} · DEMO{" "}
                 <small>
                   {m.symbol === "XAUUSD" ? "GOLD" : "FOREX / CRYPTO"}
                 </small>
@@ -584,7 +708,10 @@ function App() {
                 L <b>{fmt(data.at(-1)?.low ?? 0)}</b>
               </span>
               <span>
-                C <b className="green">{fmt(price)}</b>
+                C{" "}
+                <b className="green">
+                  {price === undefined ? "—" : fmt(price)}
+                </b>
               </span>
             </div>
             <div className="chart-wrap">
@@ -723,7 +850,11 @@ function App() {
             </div>
             <div className="order-details">
               <p>
-                Harga indikatif <strong>{fmt(price)}</strong>
+                Harga paper{" "}
+                {account.source.kind === "EXNESS" ? "EXNESS HISTORY" : "DEMO"}{" "}
+                <strong>
+                  {orderPrice === undefined ? "Menunggu" : fmt(orderPrice)}
+                </strong>
               </p>
               <p>
                 Jenis eksekusi <strong>Paper trading</strong>
@@ -737,8 +868,10 @@ function App() {
                 loading ||
                 !!error ||
                 !!feedPause ||
+                riskBlocked ||
+                !matchingFeed ||
                 account.emergency ||
-                !quotes[symbol]
+                !orderPrice
               }
               className={`submit-order ${side === "Sell" ? "sell-bg" : ""}`}
               onClick={() => order()}
@@ -758,7 +891,7 @@ function App() {
               <div>
                 <Bot size={19} />
                 <strong>Nexus AutoPilot</strong>
-                <span className="mini-badge">DEMO</span>
+                <span className="mini-badge">{account.source.kind}</span>
               </div>
               <p>
                 Strategi SMA 20 · interval 10 detik
@@ -782,7 +915,8 @@ function App() {
                 }}
               />
               <p>
-                Kerugian hari ini: ${fmt(dailyLoss(account, quotes))} / $
+                Kerugian hari ini:{" "}
+                {loss === undefined ? "Menunggu" : `$${fmt(loss)}`} / $
                 {fmt(account.dailyLimit)}
                 {riskBlocked ? " · Robot terkunci" : ""}
               </p>
@@ -790,11 +924,12 @@ function App() {
                 className={robot ? "robot-running" : ""}
                 disabled={
                   !robot &&
-                  (loading ||
+                  (!matchingFeed ||
+                    loading ||
                     !!error ||
                     !!feedPause ||
                     riskBlocked ||
-                    !quotes[symbol])
+                    !orderPrice)
                 }
                 onClick={() => setRobot(!robot)}
               >
@@ -805,6 +940,9 @@ function App() {
               <button className="emergency" onClick={emergency}>
                 Emergency stop · tutup semua
               </button>
+              <small>
+                Emergency stop hanya untuk akun paper {accountLabel}.
+              </small>
               {account.emergency && (
                 <button
                   onClick={() =>
@@ -821,17 +959,21 @@ function App() {
             <div className="pnl-strip">
               <div>
                 Floating P&L{" "}
-                <strong className={floating >= 0 ? "green" : "red"}>
-                  ${fmt(floating)}
+                <strong className={(floating ?? 0) >= 0 ? "green" : "red"}>
+                  {floating === undefined ? "Menunggu" : `$${fmt(floating)}`}
                 </strong>
               </div>
               <div>
-                Equity <strong>${fmt(10000 + realized + floating)}</strong>
+                Equity{" "}
+                <strong>
+                  {equity === undefined ? "Menunggu" : `$${fmt(equity)}`}
+                </strong>
               </div>
               <small>
-                {positions.some((p) => !quotes[p.symbol])
-                  ? "Menunggu kuotasi · P&L parsial"
-                  : "Mark DEMO / EXNESS history · refresh 5 detik"}
+                {!matchingFeed ||
+                positions.some((p) => mark(p, quotes) === undefined)
+                  ? "Menunggu feed akun yang sesuai · P&L / equity belum dinilai"
+                  : `${accountLabel} · ${account.source.kind === "EXNESS" ? "Mark M5 history, bukan tick real-time" : "Mark DEMO"}`}
               </small>
             </div>
             {storageError && (
@@ -853,7 +995,7 @@ function App() {
                   </span>
                 </button>
               ))}
-              <span className="muted">Akun simulasi</span>
+              <span className="muted">Paper {accountLabel}</span>
             </div>
             <div className="trade-list">
               <div className="trade-heading">
@@ -867,11 +1009,7 @@ function App() {
                 const p: Position | Closed = row;
                 const done = (p: Position | Closed): p is Closed =>
                   "closedAt" in p;
-                const value = done(p)
-                  ? p.pnl
-                  : quotes[p.symbol]
-                    ? pnl(p, quotes[p.symbol])
-                    : undefined;
+                const value = done(p) ? p.pnl : pnl(p, quotes);
                 return (
                   <article className="trade-card" key={p.id}>
                     <div>
@@ -907,7 +1045,9 @@ function App() {
                         </>
                       ) : (
                         <button
-                          disabled={!quotes[p.symbol]}
+                          disabled={
+                            mark(p, quotes) === undefined || !matchingFeed
+                          }
                           onClick={() =>
                             setAccount((a) =>
                               settle(close(a, p.id, quotes), quotes),
@@ -936,7 +1076,7 @@ function App() {
           </section>
           <section id="markets" className="watchlist panel">
             <div className="panel-title">
-              <h2>Watchlist</h2>
+              <h2>Watchlist · DEMO</h2>
               <Star size={15} className="muted" />
             </div>
             <input

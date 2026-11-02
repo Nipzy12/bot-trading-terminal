@@ -351,7 +351,7 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
     const valid = await deps
       .db()
       .query(
-        "SELECT id FROM nexus_private.nexus_credentials WHERE id=$1 AND user_id=$2",
+        "SELECT c.id FROM nexus_private.nexus_credentials c JOIN nexus_private.nexus_selection s ON s.credential_id=c.id AND s.user_id=c.user_id WHERE c.id=$1 AND c.user_id=$2 AND c.status='verified'",
         [row.id, owner],
       );
     if (!valid.rows.length) {
@@ -360,6 +360,7 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
     }
     res.json({
       source: "exness",
+      paperSource: { kind: "EXNESS", connectionId: row.id },
       label: "EXNESS",
       kind: "candle-history",
       live: false,
