@@ -34,6 +34,7 @@ export type StageResult = {
 };
 export type ConnectionReport = {
   success: boolean;
+  excludedBoundaryCandles?: number;
   stages: StageResult[];
   stage?: ConnectionStage | "configuration";
   error?: SafeCategory;

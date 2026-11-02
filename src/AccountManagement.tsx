@@ -227,6 +227,11 @@ export function AccountManagement() {
               {report.reason} · {candleReasonLabels[report.reason]}
             </p>
           )}
+          {report.excludedBoundaryCandles !== undefined && (
+            <p>
+              Candle boundary dikecualikan: {report.excludedBoundaryCandles}
+            </p>
+          )}
           {report.candleCount !== undefined && (
             <p>Jumlah candle: {report.candleCount}</p>
           )}

@@ -107,6 +107,7 @@ describe("fresh staged Exness read-only probe", () => {
     expect(report).toEqual({
       success: true,
       candleCount: 2,
+      excludedBoundaryCandles: 0,
       stages: connectionStages.map((stage) => ({ stage, status: "passed" })),
     });
     expect(seen).toEqual(connectionStages);

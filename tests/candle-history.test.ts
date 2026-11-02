@@ -225,7 +225,7 @@ describe("strict candle diagnostics", () => {
     ],
     [
       { candles: [{ ...good, time: "2026-11-02T12:00:00Z" }] },
-      "OUT_OF_RANGE",
+      "EMPTY_CANDLES",
       1,
     ],
     [
@@ -239,7 +239,7 @@ describe("strict candle diagnostics", () => {
       "INVALID_ORDER",
       2,
     ],
-    [{ candles: [good, good, good] }, "OUT_OF_RANGE", 3],
+    [{ candles: [good, good, good, good] }, "OUT_OF_RANGE", 4],
   ];
   it.each(cases.map(([body, reason, count]) => ({ body, reason, count })))(
     "rejects $reason (count $count)",
@@ -353,8 +353,7 @@ describe("closed from/to windows", () => {
   });
   it.each([
     ["2026-11-02T09:00:00Z", "BEFORE_FROM"],
-    ["2026-11-02T12:00:00Z", "AT_OR_AFTER_TO"],
-    ["2026-11-02T13:00:00Z", "AT_OR_AFTER_TO"],
+    ["2026-11-02T13:00:00Z", "AFTER_TO"],
     ["2026-11-02T11:30:00Z", "UNFINISHED_CANDLE"],
   ])("rejects unsafe boundary with category %s", async (time, rangeReason) => {
     const report = await fixture({
@@ -407,11 +406,93 @@ describe("closed from/to windows", () => {
   it("reports excessive count without leaking rows or accepting unknown diagnostics", async () => {
     expect(
       await fixture({
-        body: { candles: [good, good, good] },
+        body: { candles: [good, good, good, good] },
       }).reader.testConnection(),
-    ).toMatchObject({ rangeReason: "TOO_MANY_CANDLES", candleCount: 3 });
+    ).toMatchObject({ rangeReason: "TOO_MANY_CANDLES", candleCount: 4 });
     expect(
       parseReport({ stages: [], rangeReason: config.privateKey })?.rangeReason,
+    ).toBeUndefined();
+  });
+});
+
+describe("explicit unfinished boundary exception", () => {
+  const w = closedHistoryWindow(now / 1000, 3600, {
+    max_candles_per_request: 5000,
+  });
+  const closed = Array.from({ length: 123 }, (_, i) => ({
+    ...good,
+    time: new Date((w.from + i * 3600) * 1000).toISOString(),
+  }));
+  const boundary = { ...good, time: new Date(w.to * 1000).toISOString() };
+  it("uses 123 of 124 rows and reports exactly one excluded boundary", async () => {
+    const f = fixture({ max: 5000, body: { candles: [...closed, boundary] } });
+    const report = await f.reader.testConnection();
+    expect(report).toMatchObject({
+      success: true,
+      candleCount: 123,
+      excludedBoundaryCandles: 1,
+    });
+    expect(parseReport(report)?.excludedBoundaryCandles).toBe(1);
+    expect(await f.reader.candles("XAUUSD", 3600)).toHaveLength(123);
+    expect(JSON.stringify(report)).not.toContain(boundary.time);
+  });
+  it.each([
+    [
+      [
+        ...closed,
+        boundary,
+        { ...boundary, time: new Date((w.to + 3600) * 1000).toISOString() },
+      ],
+      "OUT_OF_RANGE",
+      "AFTER_TO",
+    ],
+    [[...closed, boundary, boundary], "INVALID_ORDER", undefined],
+    [[...closed, { ...boundary, high: 1 }], "INVALID_OHLC", undefined],
+    [
+      [
+        ...closed,
+        { ...boundary, time: new Date((w.to - 1800) * 1000).toISOString() },
+      ],
+      "OUT_OF_RANGE",
+      "UNFINISHED_CANDLE",
+    ],
+    [[...closed, boundary, closed[0]], "INVALID_ORDER", undefined],
+  ])(
+    "rejects invalid rows rather than silently filtering",
+    async (candles, reason, rangeReason) => {
+      const report = await fixture({
+        max: 5000,
+        body: { candles },
+      }).reader.testConnection();
+      expect(report).toMatchObject({ success: false, reason });
+      expect(report.rangeReason).toBe(rangeReason);
+      expect(report.excludedBoundaryCandles).toBeUndefined();
+    },
+  );
+  it("rejects a boundary already closed at request time and preserves max limits", () => {
+    expect(() =>
+      normalizeHistory({ candles: [good, boundary] }, 180, {
+        ...w,
+        requestedAt: w.to + 3600,
+      }),
+    ).toThrow();
+    const d = { excludedBoundaryCandles: 0 };
+    expect(
+      normalizeHistory({ candles: [good, boundary] }, 1, w, d),
+    ).toHaveLength(1);
+    expect(d.excludedBoundaryCandles).toBe(1);
+    expect(() =>
+      normalizeHistory(
+        {
+          candles: [good, { ...good, time: "2026-11-02T11:00:00Z" }, boundary],
+        },
+        1,
+        w,
+      ),
+    ).toThrow();
+    expect(
+      parseReport({ stages: [], excludedBoundaryCandles: 2 })
+        ?.excludedBoundaryCandles,
     ).toBeUndefined();
   });
 });

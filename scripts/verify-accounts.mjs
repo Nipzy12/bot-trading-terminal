@@ -88,7 +88,7 @@ try {
                 reason: "EMPTY_CANDLES",
                 candleCount: 0,
               }
-            : {}),
+            : { candleCount: 123, excludedBoundaryCandles: 1 }),
           stages: ["discovery", "account_details", "limits", "candles"].map(
             (stage) => ({
               stage,
@@ -175,6 +175,10 @@ try {
     .getByRole("button", { name: "Test Connection", exact: true })
     .click();
   await page.getByText("EXNESS · history teruji", { exact: true }).waitFor();
+  await page
+    .getByText("Candle boundary dikecualikan: 1", { exact: true })
+    .waitFor();
+  await page.getByText("Jumlah candle: 123", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Pilih akun", exact: true }).click();
   await page
     .getByRole("link", { name: "Buka chart EXNESS history →", exact: true })

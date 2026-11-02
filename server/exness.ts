@@ -371,7 +371,12 @@ export class ExnessReader {
     }
     return selectInstrument(symbol, this.instruments.names);
   }
-  private async history(symbol: string, interval: number, signal: AbortSignal) {
+  private async history(
+    symbol: string,
+    interval: number,
+    signal: AbortSignal,
+    diagnostics?: { excludedBoundaryCandles: number },
+  ) {
     try {
       const instrument = await this.accountInstrument(symbol, signal);
       const window = this.historyWindow(interval);
@@ -388,7 +393,7 @@ export class ExnessReader {
         signal,
         "getCandleHistory",
       );
-      return normalizeHistory(body, window.max, window);
+      return normalizeHistory(body, window.max, window, diagnostics);
     } catch (error) {
       if (
         error instanceof ProviderError &&
@@ -414,6 +419,7 @@ export class ExnessReader {
     }));
     const total = AbortSignal.timeout(20000);
     let candleCount: number | undefined;
+    const diagnostics = { excludedBoundaryCandles: 0 };
     for (const result of stages) {
       const signal = AbortSignal.any([total, AbortSignal.timeout(4500)]);
       try {
@@ -439,7 +445,9 @@ export class ExnessReader {
             await probe.fetchLimits(signal);
             probe.historyWindow(3600);
           } else
-            candleCount = (await probe.history("XAUUSD", 3600, signal)).length;
+            candleCount = (
+              await probe.history("XAUUSD", 3600, signal, diagnostics)
+            ).length;
         }, signal);
         result.status = "passed";
       } catch (error) {
@@ -469,7 +477,7 @@ export class ExnessReader {
         };
       }
     }
-    return { success: true, stages, candleCount };
+    return { success: true, stages, candleCount, ...diagnostics };
   }
   async candles(symbol: string, interval: number): Promise<Candle[]> {
     if (
