@@ -42,7 +42,7 @@ describe("SSRF defenses", () => {
       { address: "127.0.0.1", family: 4 },
     ]);
     await expect(resolveHost("gateway.exness.com", resolver)).rejects.toThrow(
-      "GATEWAY_NOT_ALLOWED",
+      "EXNESS_SSRF",
     );
     await expect(
       resolveHost("gateway.exness.com", vi.fn().mockResolvedValue([])),

@@ -7,12 +7,14 @@ import { database, takeRate, type Database } from "./database.js";
 import { decrypt, encrypt } from "./vault.js";
 import { ExnessReader, ProviderError, loadKey, type Config } from "./exness.js";
 import { safeOrigin, secureTransport } from "./ssrf.js";
+import { connectionStages, type ConnectionReport } from "./connection-test.js";
 import { symbols } from "./market.js";
 export type Identity = {
   user: { id: string; name: string };
   session: { id: string };
 };
 type Reader = {
+  testConnection: () => Promise<ConnectionReport>;
   candles: (symbol: string, interval: number) => Promise<unknown>;
 };
 type Dependencies = {
@@ -74,22 +76,27 @@ export function productionReader(config: Config, owner: string, id: string) {
     secureTransport,
     () => Date.now(),
     async (_op, rules) => {
-      const exists = await database().query(
-        "SELECT id FROM nexus_private.nexus_credentials WHERE id=$1 AND user_id=$2",
-        [id, owner],
-      );
-      if (!exists.rows.length)
-        throw new ProviderError("CONNECTION_DELETED", 409);
-      for (const r of rules)
-        if (
-          !(await takeRate(
-            database(),
-            `provider:${accountHash}:${r.scope}`,
-            r.limit,
-            r.window_seconds,
-          ))
-        )
-          throw new ProviderError("EXNESS_RATE_LIMIT", 429, r.window_seconds);
+      try {
+        const exists = await database().query(
+          "SELECT id FROM nexus_private.nexus_credentials WHERE id=$1 AND user_id=$2",
+          [id, owner],
+        );
+        if (!exists.rows.length)
+          throw new ProviderError("CONNECTION_DELETED", 409);
+        for (const r of rules)
+          if (
+            !(await takeRate(
+              database(),
+              `provider:${accountHash}:${r.scope}`,
+              r.limit,
+              r.window_seconds,
+            ))
+          )
+            throw new ProviderError("EXNESS_RATE_LIMIT", 429, r.window_seconds);
+      } catch (error) {
+        if (error instanceof ProviderError) throw error;
+        throw new ProviderError("ACCOUNT_SERVICE_UNAVAILABLE", 503);
+      }
     },
   );
   readers.set(cacheKey, { at: Date.now(), reader });
@@ -223,42 +230,54 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
       res.set("Retry-After", "60").status(429).json({ error: "RATE_LIMITED" });
       return;
     }
+    let report: ConnectionReport;
     try {
       const config = decrypt(row.rows[0].envelope, owner, id) as Config;
       safeOrigin(config.gateway);
-      await deps.reader(config, owner, id).candles("XAUUSD", 3600);
-      const updated = await deps
-        .db()
-        .query(
-          "UPDATE nexus_private.nexus_credentials SET status='verified',tested_at=now() WHERE id=$1 AND user_id=$2 RETURNING id",
-          [id, owner],
-        );
-      if (!updated.rows.length) {
-        res.status(409).json({ error: "CONNECTION_DELETED" });
-        return;
-      }
+      report = await deps.reader(config, owner, id).testConnection();
+    } catch (error) {
+      const code =
+        error instanceof ProviderError && error.code === "EXNESS_SSRF"
+          ? "EXNESS_SSRF"
+          : "EXNESS_CONFIGURATION";
+      report = {
+        success: false,
+        stage: "configuration",
+        error: code,
+        stages: connectionStages.map((stage) => ({ stage, status: "not_run" })),
+      };
+    }
+    // Database failures stay account-service errors, never mislabeled as provider authentication.
+    const updated = await deps
+      .db()
+      .query(
+        "UPDATE nexus_private.nexus_credentials SET status=$3,tested_at=now() WHERE id=$1 AND user_id=$2 RETURNING id",
+        [id, owner, report.success ? "verified" : "error"],
+      );
+    if (!updated.rows.length) {
+      res.status(409).json({ error: "CONNECTION_DELETED" });
+      return;
+    }
+    if (report.success) {
       res.json({
         status: "verified",
         label: "EXNESS",
         kind: "candle-history",
         live: false,
+        ...report,
       });
-    } catch (error) {
-      await deps
-        .db()
-        .query(
-          "UPDATE nexus_private.nexus_credentials SET status='error',tested_at=now() WHERE id=$1 AND user_id=$2",
-          [id, owner],
-        );
-      if (error instanceof ProviderError && error.status === 429) {
-        res
-          .set("Retry-After", String(error.retryAfter ?? 60))
-          .status(429)
-          .json({ error: "RATE_LIMITED" });
-        return;
-      }
-      res.status(502).json({ error: "CONNECTION_TEST_FAILED" });
+      return;
     }
+    if (report.retryAfter) res.set("Retry-After", String(report.retryAfter));
+    res
+      .status(
+        report.error === "RATE_LIMITED"
+          ? 429
+          : report.error === "TIMEOUT"
+            ? 504
+            : 502,
+      )
+      .json({ ...report, live: false });
   });
   router.post("/selection", async (req, res) => {
     const parsed = z.object({ id: idSchema }).strict().safeParse(req.body);

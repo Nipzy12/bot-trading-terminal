@@ -27,6 +27,7 @@ try {
   let loggedIn = false,
     accounts = [];
   let submitted = false;
+  let testCount = 0;
   const id = "11111111-1111-4111-8111-111111111111";
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -70,9 +71,25 @@ try {
       });
     }
     if (path.endsWith("/test")) {
-      accounts[0].status = "verified";
+      testCount++;
+      const failed = testCount === 1;
+      accounts[0].status = failed ? "error" : "verified";
       accounts[0].tested_at = new Date().toISOString();
-      return route.fulfill({ json: { status: "verified", live: false } });
+      return route.fulfill({
+        status: failed ? 502 : 200,
+        json: {
+          status: failed ? "error" : "verified",
+          success: !failed,
+          live: false,
+          ...(failed ? { stage: "candles", error: "EXNESS_MARKET_DATA" } : {}),
+          stages: ["discovery", "account_details", "limits", "candles"].map(
+            (stage) => ({
+              stage,
+              status: failed && stage === "candles" ? "failed" : "passed",
+            }),
+          ),
+        },
+      });
     }
     if (path === "/api/account/selection") {
       accounts[0].selected = true;
@@ -121,6 +138,31 @@ try {
       .isDisabled(),
     true,
   );
+  await page
+    .getByRole("button", { name: "Test Connection", exact: true })
+    .click();
+  const diagnostic = page.getByRole("region", {
+    name: "Hasil tahap Test Connection",
+  });
+  await diagnostic
+    .getByText("EXNESS_MARKET_DATA · XAUUSD · H1 candle history", {
+      exact: true,
+    })
+    .waitFor();
+  assert.match(await diagnostic.locator("li").nth(1).innerText(), /Lulus/);
+  assert.match(await diagnostic.locator("li").nth(3).innerText(), /Gagal/);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: "/workspace/exness-test-failure-mobile.png",
+    fullPage: true,
+  });
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    true,
+  );
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await page
     .getByRole("button", { name: "Test Connection", exact: true })
     .click();

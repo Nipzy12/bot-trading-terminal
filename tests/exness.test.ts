@@ -275,7 +275,13 @@ describe("Exness read-only adapter contract", () => {
       });
       await expect(
         new ExnessReader(config, transport, () => clock).candles("XAUUSD", 300),
-      ).rejects.toThrow(status < 500 ? "EXNESS_AUTH" : "EXNESS_UPSTREAM");
+      ).rejects.toThrow(
+        status === 401
+          ? "EXNESS_AUTH"
+          : status === 403
+            ? "EXNESS_PERMISSION"
+            : "EXNESS_UPSTREAM",
+      );
       expect(transport).toHaveBeenCalledTimes(3);
     },
   );

@@ -14,15 +14,15 @@ export const timeframes: Record<number, string> = {
   14400: "H4",
   86400: "D1",
 };
-export class ProviderError extends Error {
-  constructor(
-    public code: string,
-    public status = 502,
-    public retryAfter?: number,
-  ) {
-    super(code);
-  }
-}
+import { ProviderError } from "./provider-error.js";
+export { ProviderError } from "./provider-error.js";
+import {
+  bounded,
+  connectionStages,
+  safeFailure,
+  type ConnectionReport,
+  type StageResult,
+} from "./connection-test.js";
 export function baseUrl(text: string) {
   const u = new URL(text);
   if (
@@ -255,17 +255,25 @@ export class ExnessReader {
     try {
       response = await this.transport(host + path, {
         method: "GET",
-        headers: signedHeaders(this.config.apiKey, this.key, path, now),
+        headers: signedHeaders(this.config.apiKey, this.key, path, this.now()),
         redirect: "error",
         signal,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof ProviderError) throw error;
+      if (
+        signal.aborted ||
+        (error instanceof Error &&
+          ["TimeoutError", "AbortError"].includes(error.name))
+      )
+        throw new ProviderError("TIMEOUT", 504);
       throw new ProviderError("EXNESS_NETWORK");
     }
     let body: unknown;
     try {
       body = await response.json();
     } catch {
+      if (signal.aborted) throw new ProviderError("TIMEOUT", 504);
       if (response.ok) throw new ProviderError("EXNESS_INVALID_RESPONSE");
     }
     const error =
@@ -298,10 +306,16 @@ export class ExnessReader {
     if (!response.ok || publicError?.code !== undefined) {
       if (
         response.status === 401 ||
-        response.status === 403 ||
-        [1000, 1001, 1002].includes(Number(publicError?.code))
+        [1000, 1001].includes(Number(publicError?.code))
       )
         throw new ProviderError("EXNESS_AUTH");
+      if (
+        response.status === 403 ||
+        [1002, 2001, 2002].includes(Number(publicError?.code))
+      )
+        throw new ProviderError("EXNESS_PERMISSION");
+      if ([4000, 4004].includes(Number(publicError?.code)))
+        throw new ProviderError("EXNESS_MARKET_DATA");
       if (response.status === 404) {
         this.ap = undefined;
         this.initializedAt = 0;
@@ -315,34 +329,8 @@ export class ExnessReader {
       return;
     if (this.initializing) return this.initializing;
     this.initializing = (async () => {
-      if (!this.ap) {
-        const discovery = z
-          .object({ access_point: z.string(), account_id: z.string() })
-          .safeParse(
-            await this.get(
-              this.gateway,
-              `/v1/trading/access-point?account_id=${this.config.accountId}`,
-              signal,
-              "discovery",
-            ),
-          );
-        if (
-          !discovery.success ||
-          discovery.data.account_id !== this.config.accountId
-        )
-          throw new ProviderError("EXNESS_INVALID_RESPONSE");
-        this.ap = baseUrl(discovery.data.access_point);
-      }
-      const limits = limitsSchema.safeParse(
-        await this.get(
-          this.ap,
-          `/v1/configuration/accounts/${this.config.accountId}/limits`,
-          signal,
-          "getLimits",
-        ),
-      );
-      if (!limits.success) throw new ProviderError("EXNESS_INVALID_RESPONSE");
-      this.limits = limits.data.limits.rest;
+      if (!this.ap) await this.discover(signal);
+      await this.fetchLimits(signal);
       this.initializedAt = this.now();
     })();
     try {
@@ -350,6 +338,152 @@ export class ExnessReader {
     } finally {
       this.initializing = undefined;
     }
+  }
+  private async discover(signal: AbortSignal) {
+    const discovery = z
+      .object({ access_point: z.string(), account_id: z.string() })
+      .safeParse(
+        await this.get(
+          this.gateway,
+          `/v1/trading/access-point?account_id=${this.config.accountId}`,
+          signal,
+          "discovery",
+        ),
+      );
+    if (
+      !discovery.success ||
+      discovery.data.account_id !== this.config.accountId
+    )
+      throw new ProviderError("EXNESS_INVALID_RESPONSE");
+    try {
+      this.ap = baseUrl(discovery.data.access_point);
+    } catch {
+      throw new ProviderError("EXNESS_INVALID_RESPONSE");
+    }
+  }
+  private async fetchLimits(signal: AbortSignal) {
+    const limits = limitsSchema.safeParse(
+      await this.get(
+        this.ap!,
+        `/v1/configuration/accounts/${this.config.accountId}/limits`,
+        signal,
+        "getLimits",
+      ),
+    );
+    if (!limits.success) throw new ProviderError("EXNESS_INVALID_RESPONSE");
+    this.limits = limits.data.limits.rest;
+  }
+  private candleCount(interval: number) {
+    const method = this.limits!.methods.find(
+      (m) =>
+        m.api_operation_id === "getCandleHistory" &&
+        m.http_method === "GET" &&
+        m.path === "/v1/market-data/accounts/{account_id}/candles",
+    );
+    const shape = constraints.safeParse(method?.limits);
+    if (!method || !shape.success)
+      throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
+    let count = Math.min(180, shape.data.max_candles_per_request);
+    if (shape.data.history_range_days)
+      count = Math.min(
+        count,
+        Math.floor((shape.data.history_range_days * 86400) / interval),
+      );
+    if (shape.data.history_age_days) {
+      const age =
+        this.now() / 1000 - Math.floor(this.now() / 1000 / interval) * interval;
+      count = Math.min(
+        count,
+        Math.floor((shape.data.history_age_days * 86400 - age) / interval),
+      );
+    }
+    if (count < 1) throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
+    return count;
+  }
+  private async history(symbol: string, interval: number, signal: AbortSignal) {
+    const count = this.candleCount(interval);
+    const end = Math.floor(this.now() / 1000 / interval) * interval;
+    const start = end - count * interval;
+    const query = new URLSearchParams({
+      instrument: symbol,
+      price_type: "bid",
+      timeframe: timeframes[interval],
+      from: new Date(start * 1000).toISOString(),
+      count: String(count),
+    });
+    const rows = normalizeHistory(
+      await this.get(
+        this.ap!,
+        `/v1/market-data/accounts/${this.config.accountId}/candles?${query}`,
+        signal,
+        "getCandleHistory",
+      ),
+      count,
+    );
+    if (rows.some((c) => c.time < start || c.time >= end))
+      throw new ProviderError("EXNESS_INVALID_RESPONSE");
+    return rows;
+  }
+  async testConnection(): Promise<ConnectionReport> {
+    // Fresh probe avoids cached successes and concurrent mutations of an active chart reader.
+    const probe = new ExnessReader(
+      this.config,
+      this.transport,
+      this.now,
+      this.guard,
+    );
+    probe.cooldown = this.cooldown;
+    const stages: StageResult[] = connectionStages.map((stage) => ({
+      stage,
+      status: "not_run",
+    }));
+    const total = AbortSignal.timeout(20000);
+    for (const result of stages) {
+      const signal = AbortSignal.any([total, AbortSignal.timeout(4500)]);
+      try {
+        await bounded(async () => {
+          if (result.stage === "discovery") await probe.discover(signal);
+          else if (result.stage === "account_details") {
+            const details = z
+              .object({ account_id: z.string(), create_date: iso })
+              .safeParse(
+                await probe.get(
+                  probe.ap!,
+                  `/v1/configuration/accounts/${this.config.accountId}/account`,
+                  signal,
+                  "getAccountDetails",
+                ),
+              );
+            if (
+              !details.success ||
+              details.data.account_id !== this.config.accountId
+            )
+              throw new ProviderError("EXNESS_INVALID_RESPONSE");
+          } else if (result.stage === "limits") {
+            await probe.fetchLimits(signal);
+            probe.candleCount(3600);
+          } else await probe.history("XAUUSD", 3600, signal);
+        }, signal);
+        result.status = "passed";
+      } catch (error) {
+        const failure = safeFailure(error);
+        if (failure.code === "RATE_LIMITED")
+          this.cooldown = Math.max(
+            this.cooldown,
+            this.now() + (failure.retryAfter ?? 60) * 1000,
+          );
+        result.status = "failed";
+        result.code = failure.code;
+        return {
+          success: false,
+          stage: result.stage,
+          error: failure.code,
+          stages,
+          ...(failure.retryAfter ? { retryAfter: failure.retryAfter } : {}),
+        };
+      }
+    }
+    return { success: true, stages };
   }
   async candles(symbol: string, interval: number): Promise<Candle[]> {
     if (
@@ -367,39 +501,7 @@ export class ExnessReader {
     const promise = (async () => {
       const signal = AbortSignal.timeout(6500);
       await this.initialize(signal);
-      const method = this.limits!.methods.find(
-        (m) =>
-          m.api_operation_id === "getCandleHistory" &&
-          m.http_method === "GET" &&
-          m.path === "/v1/market-data/accounts/{account_id}/candles",
-      );
-      const shape = constraints.safeParse(method?.limits);
-      if (!method || !shape.success)
-        throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
-      let count = Math.min(180, shape.data.max_candles_per_request);
-      for (const days of [
-        shape.data.history_range_days,
-        shape.data.history_age_days,
-      ])
-        if (days)
-          count = Math.min(count, Math.floor((days * 86400) / interval));
-      if (count < 1) throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
-      const end = Math.floor(this.now() / 1000 / interval) * interval;
-      const start = end - count * interval;
-      const query = new URLSearchParams({
-        instrument: symbol,
-        price_type: "bid",
-        timeframe: timeframes[interval],
-        from: new Date(start * 1000).toISOString(),
-        count: String(count),
-      });
-      const path = `/v1/market-data/accounts/${this.config.accountId}/candles?${query}`;
-      const rows = normalizeHistory(
-        await this.get(this.ap!, path, signal, "getCandleHistory"),
-        count,
-      );
-      if (rows.some((c) => c.time < start || c.time >= end))
-        throw new ProviderError("EXNESS_INVALID_RESPONSE");
+      const rows = await this.history(symbol, interval, signal);
       this.cache.set(cacheKey, { at: this.now(), rows });
       return rows;
     })();

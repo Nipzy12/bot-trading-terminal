@@ -32,7 +32,7 @@ Open `http://localhost:5173`. `/accounts` is the account page; Vite proxies `/ap
 4. Open `/accounts`, register an application user with a password of at least 12 characters, and sign in. Use an application password, **not your Exness password**. Better Auth manages hashed passwords and database-backed sessions. Email verification and password recovery email delivery are not configured in this release; registration proves possession of the application password, not ownership of an email inbox.
 5. In Exness **Key Management**, create/select a Trader API key with **Trading read access only**. Follow the [official key and host setup](https://www.exness-api.com/authentication/api-key-and-host-setup). Copy the account ID and **Gateway from the DNS widget**, not a sample hostname or a guessed Access Point. Do not send any of these values through chat, screenshots, GitHub, or browser storage.
 6. Click **Connect Exness**. Enter a connection label, API Key, Private Signing Key, Account ID and Gateway URL. The private signing key may be Exness-generated 128-character hex (seed + public key), or your Ed25519 PKCS#8 PEM. Submit directly through the HTTPS form. Fields are cleared after submission; there is no read-back endpoint for any credential field.
-7. Click **Test Connection**. This performs only signed GET discovery, limits and XAUUSD H1 candle history. A valid result marks the connection **EXNESS · history teruji**. Select that account, then **Buka chart EXNESS history**. If XAUUSD is not available for the account, the test fails without claiming connectivity; only the six supported instruments are available in this release.
+7. Click **Test Connection**. This performs fresh signed GET tests in order: Gateway discovery → read-only account details → limits → XAUUSD H1 candle history. Each stage is reported as passed, failed or not_run; later stages are not attempted after failure. A valid result marks the connection **EXNESS · history teruji**. Select that account, then **Buka chart EXNESS history**. If XAUUSD is not available for the account, the test fails without claiming connectivity; only the six supported instruments are available in this release.
 8. **Disconnect & hapus** deletes the active encrypted credential record, clears selection by foreign key, and invalidates its reader cache. It does not revoke the API key at Exness; revoke that separately in Key Management if needed. Database backups/WAL may retain ciphertext according to your database provider's retention policy.
 
 For Preview, set a separate database/auth/encryption configuration and exact stable `APP_ORIGIN` for the branch alias. Do not reuse Production secret values in untrusted previews. Never expose a database or encryption key through public build variables. V3 no longer uses global `EXN_*` or the V1 bridge variables; the public endpoint always returns DEMO, even if obsolete global variables remain configured.
@@ -74,3 +74,26 @@ UI seconds map `300→M5`, `900→M15`, `3600→H1`, `14400→H4`, `86400→D1`.
 Mobile position cards, floating/realized P&L, equity, optional price-based SL/TP, history and versioned browser-local paper persistence remain available. localStorage contains only paper positions/history and risk settings, never credentials. The robot always starts stopped; its running state is never persisted. Default UTC daily loss budget is $100, counting realized losses plus floating losses without netting gains; reaching it locks the robot until the next UTC day. Emergency stop halts the robot, closes quoted positions, queues unquoted positions until the feed returns, and persists a manual-unlock latch.
 
 SL/TP, paper valuation and the robot run only while the page is open. Marks are DEMO synthetic values or the last closed M5 candle from the selected private Exness account; they are not broker execution prices. Public DEMO is always the default. Contract sizes and USDJPY conversion are simulation assumptions; fees, margin and real execution are not modeled. This is not investment advice.
+
+## Diagnostik Test Connection
+
+Kontrak dicek kembali pada 2 November 2026 terhadap [request signing](https://www.exness-api.com/authentication/request-signing), [discovery](https://www.exness-api.com/trading/get-started/access-point-host-discovery), dan [OpenAPI Trader API](https://www.exness-api.com/openapi/trading.public.yaml). Endpoint account details adalah signed GET `/v1/configuration/accounts/{account_id}/account`; `account_id` harus cocok dan `create_date` harus ISO date-time sesuai schema. Data account details tidak diteruskan ke frontend.
+
+Test manual memakai probe baru agar cache chart tidak menyembunyikan kegagalan. Urutan tetap `discovery`, `account_details`, `limits`, `candles`. Pada kegagalan, respons aman memuat `stage`, `error`, `stages` (status `passed`/`failed`/`not_run`) dan opsional `retryAfter`. Tidak memuat account ID, URL host/IP, key, signed header, body provider atau diagnostic text mentah. Riwayat status tahap ditampilkan pada hasil test saat ini; metadata koneksi tetap hanya menyimpan status dan waktu test terakhir.
+
+| Kategori | Arti |
+| --- | --- |
+| EXNESS_AUTH | HTTP 401 / kode autentikasi Exness 1000 atau 1001 pada tahap yang ditampilkan |
+| EXNESS_PERMISSION | HTTP 403 / kode 1002 atau pembatasan akun; periksa akses akun, read scope dan IP, jangan full access |
+| EXNESS_NETWORK | Kegagalan DNS, TLS atau jaringan |
+| TIMEOUT | Deadline tahap atau test keseluruhan tercapai; HTTP 504 |
+| EXNESS_SSRF | Host/IP ditolak oleh allowlist atau proteksi SSRF |
+| EXNESS_INVALID_RESPONSE | Bentuk respons, account ID, waktu atau OHLC tidak valid |
+| EXNESS_LIMITS_UNAVAILABLE | Batas candle yang diperlukan belum tersedia; gagal pada tahap limits |
+| EXNESS_MARKET_DATA | Instrumen/candle tidak tersedia (4000/4004), bukan kesimpulan bahwa key salah |
+| RATE_LIMITED | Quota lokal/provider tercapai; HTTP 429 dan Retry-After, tanpa retry otomatis |
+| EXNESS_UPSTREAM | Provider menolak/gagal tanpa kategori di atas |
+| EXNESS_CONFIGURATION | Persiapan/dekripsi/format konfigurasi tidak dapat dipakai; tidak ada diagnosis key API ditolak |
+| ACCOUNT_SERVICE_UNAVAILABLE | Gangguan layanan database/accounting, bukan kegagalan autentikasi Exness |
+
+Setiap tahap dibatasi 4,5 detik dan total test 20 detik, di bawah function 30 detik; DNS lookup juga memiliki deadline dan hasil DNS dipin ke TLS lookup. Transport dihentikan setelah respons atau abort. Timestamp/signature dibuat setelah quota guard selesai agar waktu request tetap segar. Tidak ada redirect, perluasan allowlist otomatis, peningkatan izin atau broker mutation. Kegagalan tahap candle mempertahankan hasil lulus discovery/account details/limits; lihat tahap dan kategori sebelum mengubah konfigurasi. Tidak ada test dengan kredensial Exness nyata selama pengembangan.

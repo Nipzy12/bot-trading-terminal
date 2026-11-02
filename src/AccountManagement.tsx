@@ -1,4 +1,10 @@
 import { useEffect, useState, type FormEvent } from "react";
+import {
+  parseReport,
+  stageLabels,
+  categoryMessages,
+  type ClientReport,
+} from "./connection-report";
 type Connection = {
   id: string;
   label: string;
@@ -12,6 +18,7 @@ export function AccountManagement() {
     [session, setSession] = useState<Session | null>(null),
     [accounts, setAccounts] = useState<Connection[]>([]),
     [message, setMessage] = useState(""),
+    [report, setReport] = useState<ClientReport | null>(null),
     [busy, setBusy] = useState(false),
     [signup, setSignup] = useState(false),
     [showConnect, setShowConnect] = useState(false);
@@ -28,16 +35,20 @@ export function AccountManagement() {
       body: body ? JSON.stringify(body) : undefined,
     });
     const data = await r.json();
+    const diagnostic = parseReport(data);
+    if (diagnostic) setReport(diagnostic);
     if (!r.ok) {
       if (r.status === 401) setSession(null);
       throw Error(
-        data.error === "CSRF_REJECTED"
-          ? "Sesi berubah. Muat ulang halaman sebelum melanjutkan."
-          : data.error === "CONNECTION_TEST_FAILED"
-            ? "Test belum berhasil. Periksa izin read-only, akun, key dan Gateway melalui portal Exness."
-            : data.error === "RATE_LIMITED"
-              ? "Terlalu banyak permintaan. Tunggu sebelum mencoba lagi."
-              : "Layanan belum tersedia atau permintaan ditolak.",
+        diagnostic?.error
+          ? `${stageLabels[diagnostic.stage ?? "configuration"]}: ${diagnostic.error}. ${categoryMessages[diagnostic.error]}`
+          : data.error === "CSRF_REJECTED"
+            ? "Sesi berubah. Muat ulang halaman sebelum melanjutkan."
+            : data.error === "CONNECTION_TEST_FAILED"
+              ? "Test belum berhasil. Periksa izin read-only, akun, key dan Gateway melalui portal Exness."
+              : data.error === "RATE_LIMITED"
+                ? "Terlalu banyak permintaan. Tunggu sebelum mencoba lagi."
+                : "Layanan belum tersedia atau permintaan ditolak.",
       );
     }
     return data;
@@ -133,6 +144,7 @@ export function AccountManagement() {
   async function action(path: string, method: string, body?: unknown) {
     setBusy(true);
     setMessage("");
+    setReport(null);
     try {
       const result = await call(path, method, body);
       await load();
@@ -145,6 +157,7 @@ export function AccountManagement() {
       );
     } catch (e) {
       setMessage((e as Error).message);
+      await load().catch(() => {});
     } finally {
       setBusy(false);
     }
@@ -168,6 +181,45 @@ export function AccountManagement() {
         <div role="status" className="account-message">
           {message}
         </div>
+      )}
+      {report && (
+        <section
+          className="panel account-box connection-report"
+          aria-label="Hasil tahap Test Connection"
+        >
+          <h2>Hasil Test Connection · read-only</h2>
+          <ol>
+            {report.stages.map((item) => (
+              <li key={item.stage}>
+                <span>{stageLabels[item.stage]}</span>
+                <strong
+                  className={
+                    item.status === "passed"
+                      ? "green"
+                      : item.status === "failed"
+                        ? "red"
+                        : "muted"
+                  }
+                >
+                  {item.status === "passed"
+                    ? "Lulus"
+                    : item.status === "failed"
+                      ? "Gagal"
+                      : "Belum dijalankan"}
+                </strong>
+              </li>
+            ))}
+          </ol>
+          {report.error && (
+            <p>
+              {report.error} · {stageLabels[report.stage ?? "configuration"]}
+            </p>
+          )}
+          <p>
+            Kegagalan candle tidak membatalkan hasil autentikasi yang sudah
+            lulus. Bukan ticks live; broker order tetap nonaktif.
+          </p>
+        </section>
       )}
       {enabled === null ? (
         <p>Memeriksa layanan akun…</p>

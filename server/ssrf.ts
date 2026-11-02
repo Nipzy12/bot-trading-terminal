@@ -1,6 +1,8 @@
 import { lookup } from "node:dns/promises";
 import ipaddr from "ipaddr.js";
 import { Agent, fetch as safeFetch } from "undici";
+import { bounded } from "./connection-test.js";
+import { ProviderError } from "./provider-error.js";
 import { baseUrl } from "./exness.js";
 export function allowedHost(host: string) {
   const suffixes = (
@@ -14,7 +16,7 @@ export function allowedHost(host: string) {
 export function safeOrigin(value: string) {
   const origin = baseUrl(value);
   if (!allowedHost(new URL(origin).hostname))
-    throw Error("GATEWAY_NOT_ALLOWED");
+    throw new ProviderError("EXNESS_SSRF");
   return origin;
 }
 export function publicAddress(value: string) {
@@ -33,17 +35,19 @@ export function publicAddress(value: string) {
 export async function resolveHost(host: string, resolver = lookup) {
   const addresses = await resolver(host, { all: true, verbatim: true });
   if (!addresses.length || addresses.some((a) => !publicAddress(a.address)))
-    throw Error("GATEWAY_NOT_ALLOWED");
+    throw new ProviderError("EXNESS_SSRF");
   return addresses;
 }
 // Every request revalidates the hostname and pins the validated DNS results into TLS lookup.
 // Redirects are forbidden; TLS SNI/certificate verification still use the original host.
 export const secureTransport: typeof fetch = async (input, init) => {
   const url = new URL(String(input));
-  if (url.username || url.password) throw Error("GATEWAY_NOT_ALLOWED");
+  if (url.username || url.password) throw new ProviderError("EXNESS_SSRF");
   safeOrigin(url.origin);
   init?.signal?.throwIfAborted();
-  const addresses = await resolveHost(url.hostname);
+  const addresses = init?.signal
+    ? await bounded(() => resolveHost(url.hostname), init.signal)
+    : await resolveHost(url.hostname);
   init?.signal?.throwIfAborted();
   const dispatcher = new Agent({
     connect: {
@@ -66,7 +70,7 @@ export const secureTransport: typeof fetch = async (input, init) => {
       for await (const chunk of response.body) {
         length += chunk.length;
         if (length > 2 * 1024 * 1024)
-          throw Error("UPSTREAM_RESPONSE_TOO_LARGE");
+          throw new ProviderError("EXNESS_INVALID_RESPONSE");
         chunks.push(chunk);
       }
     }
@@ -76,6 +80,6 @@ export const secureTransport: typeof fetch = async (input, init) => {
       headers: Object.fromEntries(response.headers),
     });
   } finally {
-    await dispatcher.close();
+    await dispatcher.destroy();
   }
 };

@@ -1667,3 +1667,20 @@ main {
     font-size: 11px;
   }
 }
+.connection-report ol {
+  list-style: none;
+  padding: 0;
+  margin: 20px 0;
+}
+.connection-report li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid #2b364b;
+  font-size: 12px;
+}
+.connection-report li strong {
+  white-space: nowrap;
+  font-size: 11px;
+}

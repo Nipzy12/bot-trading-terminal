@@ -16,6 +16,7 @@ import request from "supertest";
 import { accountRouter, csrf, type Identity } from "../server/accounts";
 import { encrypt, decrypt } from "../server/vault";
 import { takeRate, type Database } from "../server/database";
+import { connectionStages } from "../server/connection-test";
 import { ProviderError } from "../server/exness";
 let pg: PGlite;
 let db: Database;
@@ -39,6 +40,13 @@ const bob: Identity = {
   session: { id: "session-bob" },
 };
 const reader = vi.fn(() => ({
+  testConnection: async () => ({
+    success: true,
+    stages: connectionStages.map((stage) => ({
+      stage,
+      status: "passed" as const,
+    })),
+  }),
   candles: vi
     .fn()
     .mockResolvedValue([
@@ -284,6 +292,7 @@ describe("credential vault and private API", () => {
       .send({ id });
     const racing = app({
       reader: () => ({
+        testConnection: async () => ({ success: true, stages: [] }),
         candles: async () => {
           await db.query(
             "DELETE FROM nexus_credentials WHERE id=$1 AND user_id=$2",
@@ -324,10 +333,58 @@ describe("credential vault and private API", () => {
     }
     expect(reader).not.toHaveBeenCalled();
   });
+  it.each([
+    ["discovery", "EXNESS_AUTH", 502],
+    ["account_details", "EXNESS_PERMISSION", 502],
+    ["limits", "RATE_LIMITED", 429],
+    ["candles", "TIMEOUT", 504],
+  ] as const)(
+    "returns safe stage %s and category %s",
+    async (stage, error, status) => {
+      const id = (await connect()).body.id;
+      const failed = app({
+        reader: () => ({
+          candles: async () => [],
+          testConnection: async () => ({
+            success: false,
+            stage,
+            error,
+            retryAfter: error === "RATE_LIMITED" ? 30 : undefined,
+            stages: connectionStages.map((s) => ({
+              stage: s,
+              status:
+                connectionStages.indexOf(s) < connectionStages.indexOf(stage)
+                  ? "passed"
+                  : s === stage
+                    ? "failed"
+                    : "not_run",
+            })),
+          }),
+        }),
+      });
+      const r = await request(failed)
+        .post(`/api/account/connections/${id}/test`)
+        .set(headers());
+      expect(r.status).toBe(status);
+      expect(r.body).toMatchObject({ stage, error, live: false });
+      expect(r.text).not.toContain(secret.apiKey);
+      if (status === 429) expect(r.headers["retry-after"]).toBe("30");
+    },
+  );
   it("sanitizes provider failures without exposing credentials or internal diagnostics", async () => {
     const id = (await connect()).body.id;
     const failed = app({
       reader: () => ({
+        testConnection: async () => ({
+          success: false,
+          stage: "candles",
+          error: "EXNESS_INVALID_RESPONSE",
+          stages: connectionStages.map((stage) => ({
+            stage,
+            status:
+              stage === "candles" ? ("failed" as const) : ("passed" as const),
+          })),
+        }),
         candles: async () => {
           throw Error(secret.apiKey + secret.privateKey);
         },
@@ -337,6 +394,11 @@ describe("credential vault and private API", () => {
       .post(`/api/account/connections/${id}/test`)
       .set(headers());
     expect(r.status).toBe(502);
-    expect(r.text).toBe('{"error":"CONNECTION_TEST_FAILED"}');
+    expect(r.body).toMatchObject({
+      error: "EXNESS_INVALID_RESPONSE",
+      stage: "candles",
+      live: false,
+    });
+    expect(r.text).not.toContain(secret.apiKey);
   });
 });

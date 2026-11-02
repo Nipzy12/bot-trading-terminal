@@ -11,7 +11,7 @@ vi.mock("undici", () => ({
     constructor(options: unknown) {
       state.options = options;
     }
-    async close() {
+    async destroy() {
       state.closed = true;
     }
   },
