@@ -91,10 +91,12 @@ export async function livePreflight(req: IncomingMessage, res: ServerResponse) {
       interval,
       reader,
     );
+    stage = "DNS_FAILED";
     await bounded(
       () => resolveHost(new URL(safeOrigin(prepared.host)).hostname),
       AbortSignal.timeout(4000),
     );
+    stage = "BOOTSTRAP_FAILED";
     const still = await db.query(
       "SELECT c.id FROM nexus_private.nexus_credentials c JOIN nexus_private.nexus_selection s ON s.credential_id=c.id AND s.user_id=c.user_id WHERE c.id=$1 AND c.user_id=$2 AND c.status='verified'",
       [row.id, owner],

@@ -1,4 +1,6 @@
 import {
+  networkStages,
+  streamStatusLabel,
   preflightCode,
   preflightCodes,
   rateInfo,
@@ -39,7 +41,9 @@ export function useLive(
       id = "",
       attempt = 0,
       reason = "",
-      healthy = false;
+      reasonLabel = "",
+      healthy = false,
+      upstreamOpened = false;
     const saved = () => {
       try {
         const v = JSON.parse(
@@ -84,6 +88,8 @@ export function useLive(
       id = "";
       healthy = false;
       reason = "";
+      reasonLabel = "";
+      upstreamOpened = false;
       status("CONNECTING");
       try {
         const r = await fetch(
@@ -147,29 +153,34 @@ export function useLive(
             if (t) {
               last = t.time;
               healthy = true;
+              upstreamOpened = true;
+              reason = "";
+              reasonLabel = "";
               h.current.tick(t);
               status("EXNESS_LIVE");
             }
           } else if (raw.type === "status") {
             healthy = false;
+            upstreamOpened ||= raw.upstreamOpened === true;
             reason = String(raw.code);
             if (reason === "RATE_LIMITED" || reason === "CONNECTION_QUOTA")
               limited(raw);
-            status(
-              [
-                "MAX_DURATION",
-                "DISCONNECTED",
-                "RATE_LIMITED",
-                "EXNESS_PERMISSION",
-                "EXNESS_PERMISSION_OR_UNAVAILABLE",
-                "EXNESS_NETWORK",
-                "EXNESS_UNAVAILABLE",
-                "AUTH_REVOKED",
-                ...preflightCodes,
-              ].includes(reason)
-                ? reason
-                : "UNAVAILABLE",
-            );
+            const safeCode = [
+              "MAX_DURATION",
+              "DISCONNECTED",
+              "RATE_LIMITED",
+              "EXNESS_PERMISSION",
+              "EXNESS_PERMISSION_OR_UNAVAILABLE",
+              "EXNESS_NETWORK",
+              "EXNESS_UNAVAILABLE",
+              "AUTH_REVOKED",
+              ...preflightCodes,
+              ...networkStages.filter((code) => code !== "EXNESS_LIVE"),
+            ].includes(reason)
+              ? reason
+              : "UNAVAILABLE";
+            reasonLabel = streamStatusLabel(safeCode, raw);
+            status(reasonLabel);
           }
         } catch {
           status("INVALID_STREAM");
@@ -179,7 +190,18 @@ export function useLive(
       };
       socket.onclose = () => {
         healthy = false;
-        status(reason || "WEBSOCKET_UPGRADE_FAILED");
+        if (
+          [
+            "WS_CONNECTED",
+            "SUBSCRIPTION_SENT",
+            "WAITING_FOR_BROKER_TICK",
+          ].includes(reason) ||
+          (!reason && upstreamOpened)
+        ) {
+          reason = "WS_DISCONNECTED";
+          reasonLabel = "WS_DISCONNECTED";
+        }
+        status(reasonLabel || reason || "WEBSOCKET_UPGRADE_FAILED");
         if (
           !done &&
           !document.hidden &&
@@ -191,7 +213,7 @@ export function useLive(
       };
       socket.onerror = () => {
         healthy = false;
-        status("WEBSOCKET_UPGRADE_FAILED");
+        status(reasonLabel || reason || "WEBSOCKET_UPGRADE_FAILED");
       };
     }
     const visibility = () => {

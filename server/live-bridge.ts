@@ -1,3 +1,5 @@
+import tls from "node:tls";
+import { networkFailure, type NetworkPhase } from "./live-network.js";
 import { liveBootstrap } from "./live-cache.js";
 import { rateInfo, type RateInfo } from "../src/live-diagnostics.js";
 import { liveFailure } from "./live-preflight.js";
@@ -26,18 +28,23 @@ export function attachLive(server: http.Server) {
       lease: string | undefined,
       hash: string | undefined,
       closed = false;
+    let phase: NetworkPhase = "DNS";
+    let upstreamOpened = false;
+    let handshake: ReturnType<typeof setTimeout> | undefined;
+    let diagnostic: Record<string, unknown> = {};
     let timer: ReturnType<typeof setTimeout> | undefined,
       check: ReturnType<typeof setInterval> | undefined;
     const send = (value: unknown) => {
       if (client?.readyState === WebSocket.OPEN)
         client.send(JSON.stringify(value));
     };
-    const stop = (code = "DISCONNECTED", info: RateInfo = {}) => {
+    const stop = (code = "WS_DISCONNECTED", info: RateInfo = {}) => {
       if (closed) return;
       closed = true;
       clearTimeout(timer);
+      clearTimeout(handshake);
       clearInterval(check);
-      send({ type: "status", code, ...info });
+      send({ type: "status", code, ...diagnostic, upstreamOpened, ...info });
       upstream?.terminate();
       client?.close(1000);
       if (!client) socket.destroy();
@@ -83,6 +90,7 @@ export function attachLive(server: http.Server) {
       wss.handleUpgrade(req, socket, head, (ws) => {
         client = ws;
         ws.on("close", () => stop());
+        ws.on("error", () => stop("WS_DISCONNECTED"));
         ws.on("message", () => stop("INVALID_CLIENT_MESSAGE"));
       });
       if (!(await takeRate(db, `live-user:${owner}`, 12, 60)))
@@ -141,11 +149,18 @@ export function attachLive(server: http.Server) {
       if (Buffer.byteLength(subscription) > prepared.maxMessageBytes)
         throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
 
-      const host = safeOrigin(prepared.host),
+      const host = safeOrigin(prepared.host);
+      let addresses: Awaited<ReturnType<typeof resolveHost>>;
+      try {
         addresses = await bounded(
           () => resolveHost(new URL(host).hostname),
           AbortSignal.timeout(4000),
         );
+      } catch (error) {
+        diagnostic = networkFailure(error, "DNS");
+        stop("DNS_FAILED");
+        return;
+      }
       if (closed) return;
       const valid = async () => {
         const session = await auth().api.getSession({
@@ -161,6 +176,14 @@ export function attachLive(server: http.Server) {
       if (!(await valid())) throw new ProviderError("CONNECTION_DELETED", 409);
       if (closed) return;
       send({ type: "basis", connectionId: row.id, symbol, interval, candles });
+      phase = "TCP";
+      handshake = setTimeout(() => {
+        diagnostic = {
+          stage: "WS_HANDSHAKE_TIMEOUT",
+          internalCode: "HANDSHAKE_DEADLINE",
+        };
+        stop("WS_HANDSHAKE_TIMEOUT");
+      }, 5000);
       upstream = new WebSocket(
         host.replace(/^https:/, "wss:") + prepared.path,
         {
@@ -170,7 +193,25 @@ export function attachLive(server: http.Server) {
             prepared.path,
           ),
           followRedirects: false,
-          handshakeTimeout: 5000,
+          // Our wall-clock deadline also bounds TCP and TLS, without parsing ws errors.
+          handshakeTimeout: 6000,
+          createConnection: ((options: tls.ConnectionOptions) => {
+            // Preserve the validated AP hostname for SNI/certificate checks. Never dial
+            // an IP URL, bypass verification, use a proxy, or follow redirects.
+            const connection = tls.connect({
+              ...options,
+              path: undefined,
+              servername: new URL(host).hostname,
+              rejectUnauthorized: true,
+            } as tls.ConnectionOptions);
+            connection.once("connect", () => {
+              phase = "TLS";
+            });
+            connection.once("secureConnect", () => {
+              phase = "HANDSHAKE";
+            });
+            return connection;
+          }) as typeof import("node:net").createConnection,
           maxPayload: 16384,
           lookup: (_host, options, cb) => {
             if ((options as { all?: boolean }).all) cb(null, addresses as any);
@@ -183,8 +224,30 @@ export function attachLive(server: http.Server) {
       client?.on("pong", () => {
         lastPong = Date.now();
       });
-      upstream.on("open", () => upstream?.send(subscription));
+      upstream.on("open", () => {
+        if (closed) return;
+        clearTimeout(handshake);
+        phase = "OPEN";
+        upstreamOpened = true;
+        send({ type: "status", code: "WS_CONNECTED", upstreamOpened });
+        upstream?.send(subscription, (error?: Error) => {
+          if (closed) return;
+          if (error) {
+            diagnostic = networkFailure(error, phase);
+            stop("WS_DISCONNECTED");
+            return;
+          }
+          send({ type: "status", code: "SUBSCRIPTION_SENT", upstreamOpened });
+          if (!last)
+            send({
+              type: "status",
+              code: "WAITING_FOR_BROKER_TICK",
+              upstreamOpened,
+            });
+        });
+      });
       upstream.on("message", (bytes) => {
+        if (closed || !upstreamOpened) return;
         try {
           const raw = JSON.parse(bytes.toString());
           if (raw.error || raw.code) {
@@ -226,13 +289,19 @@ export function attachLive(server: http.Server) {
         }
       });
       upstream.on("unexpected-response", (_r, response) => {
-        response.destroy();
+        clearTimeout(handshake);
+        const status = response.statusCode;
+        diagnostic = {
+          stage: "WS_HTTP_REJECTED",
+          internalCode: "HTTP_REJECTED",
+          ...([400, 401, 403, 404, 408, 429, 500, 502, 503, 504].includes(
+            status ?? 0,
+          )
+            ? { httpStatus: status }
+            : {}),
+        };
         stop(
-          response.statusCode === 429
-            ? "RATE_LIMITED"
-            : response.statusCode === 401 || response.statusCode === 403
-              ? "EXNESS_PERMISSION"
-              : "EXNESS_UNAVAILABLE",
+          response.statusCode === 429 ? "RATE_LIMITED" : "WS_HTTP_REJECTED",
           response.statusCode === 429
             ? {
                 rateLimitSource: "EXNESS_WS",
@@ -242,9 +311,21 @@ export function attachLive(server: http.Server) {
               }
             : {},
         );
+        response.destroy();
       });
-      upstream.on("error", () => stop("EXNESS_NETWORK"));
-      upstream.on("close", () => stop());
+      upstream.on("error", (error) => {
+        if (closed) return;
+        diagnostic = networkFailure(error, phase);
+        stop(String(diagnostic.stage));
+      });
+      upstream.on("close", () => {
+        if (closed) return;
+        diagnostic = {
+          stage: "WS_DISCONNECTED",
+          internalCode: upstreamOpened ? "SOCKET_CLOSED" : "CLOSED_BEFORE_OPEN",
+        };
+        stop("WS_DISCONNECTED");
+      });
       check = setInterval(() => {
         if (Date.now() - lastPong > 6000) {
           stop("DISCONNECTED");
@@ -258,7 +339,10 @@ export function attachLive(server: http.Server) {
           .catch(() => stop("AUTH_UNAVAILABLE"));
       }, 2000);
     } catch (error) {
-      const category = liveFailure(error);
+      const category = (["TCP", "TLS", "HANDSHAKE"] as string[]).includes(phase)
+        ? ((diagnostic = networkFailure(error, phase)),
+          String(diagnostic.stage))
+        : liveFailure(error);
       const status =
         error instanceof ProviderError &&
         [400, 401, 403, 409, 429].includes(error.status)

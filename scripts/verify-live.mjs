@@ -38,6 +38,39 @@ try {
   });
   await page.goto("http://localhost:5173/?feed=live");
   await page.waitForFunction(() => window.sockets.length > 0);
+  await page.evaluate(() =>
+    window.sockets.at(-1).emit({ type: "status", code: "EXNESS_LIVE" }),
+  );
+  assert.equal(
+    await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),
+    true,
+  );
+  assert.notEqual(
+    await page.locator(".exchange").textContent(),
+    "EXNESS · LIVE",
+  );
+  for (const code of [
+    "WS_CONNECTED",
+    "SUBSCRIPTION_SENT",
+    "WAITING_FOR_BROKER_TICK",
+  ]) {
+    await page.evaluate(
+      (code) =>
+        window.sockets
+          .at(-1)
+          .emit({ type: "status", code, upstreamOpened: true }),
+      code,
+    );
+    await page.getByRole("status").filter({ hasText: code }).waitFor();
+    assert.equal(
+      await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),
+      true,
+    );
+    assert.notEqual(
+      await page.locator(".exchange").textContent(),
+      "EXNESS · LIVE",
+    );
+  }
   await page.evaluate(() => {
     const interval = 3600,
       end = Math.floor(Date.now() / 1000 / interval) * interval;
@@ -99,6 +132,42 @@ try {
     );
   }
   assert.equal(polling, 0);
+  for (const code of [
+    "DNS_FAILED",
+    "TCP_CONNECT_FAILED",
+    "TLS_FAILED",
+    "WS_HANDSHAKE_TIMEOUT",
+    "WS_HTTP_REJECTED",
+    "WS_DISCONNECTED",
+  ]) {
+    await page.evaluate((code) => {
+      const socket = window.sockets.at(-1);
+      socket.emit({
+        type: "status",
+        code,
+        internalCode: "ERR_TLS_CERT_ALTNAME_INVALID",
+        httpStatus: 403,
+        rawError: "DO_NOT_DISPLAY_PRIVATE",
+        upstreamOpened: false,
+      });
+      socket.onclose?.();
+    }, code);
+    await page.getByRole("status").filter({ hasText: code }).waitFor();
+    assert.equal(
+      await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),
+      true,
+    );
+    assert.notEqual(
+      await page.locator(".exchange").textContent(),
+      "EXNESS · LIVE",
+    );
+    assert.equal(
+      (await page.locator("body").textContent()).includes(
+        "DO_NOT_DISPLAY_PRIVATE",
+      ),
+      false,
+    );
+  }
   await page.evaluate(() =>
     window.sockets.at(-1).emit({
       type: "status",

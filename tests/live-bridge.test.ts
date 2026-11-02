@@ -9,13 +9,16 @@ const state = vi.hoisted(() => ({
   selected: true,
   rate: true,
   failure: "",
+  dnsFailure: "",
 }));
 vi.mock("ws", async () => {
   const actual = await vi.importActual<typeof import("ws")>("ws"),
     { EventEmitter } = await import("node:events");
   class Upstream extends EventEmitter {
     static OPEN = 1;
-    send = vi.fn();
+    send = vi.fn((_data: string, callback?: (error?: Error) => void) =>
+      callback?.(),
+    );
     constructor(
       public url: string,
       public options: any,
@@ -110,7 +113,13 @@ vi.mock("../server/accounts", () => ({
 }));
 vi.mock("../server/ssrf", () => ({
   safeOrigin: (s: string) => s,
-  resolveHost: async () => [{ address: "8.8.8.8", family: 4 }],
+  resolveHost: async () => {
+    if (state.dnsFailure)
+      throw Object.assign(new Error("secret host and account"), {
+        code: state.dnsFailure,
+      });
+    return [{ address: "8.8.8.8", family: 4 }];
+  },
 }));
 import { livePreflight } from "../server/live-preflight";
 import { attachLive } from "../server/live-bridge";
@@ -124,6 +133,8 @@ afterEach(async () => {
   state.selected = true;
   state.rate = true;
   state.failure = "";
+  state.dnsFailure = "";
+  vi.useRealTimers();
   state.leased = false;
   state.upstreams = [];
 });
@@ -318,3 +329,226 @@ it.each([
     expect(state.upstreams).toHaveLength(0);
   },
 );
+
+async function observed() {
+  const ws = await start(),
+    frames: any[] = [];
+  ws.on("message", (b) => frames.push(JSON.parse(b.toString())));
+  await once(ws, "open");
+  return { ws, frames };
+}
+it("reports DNS failure safely and releases the shared lease", async () => {
+  state.dnsFailure = "ENOTFOUND";
+  const { frames } = await observed();
+  await vi.waitFor(() =>
+    expect(frames).toContainEqual(
+      expect.objectContaining({
+        code: "DNS_FAILED",
+        internalCode: "ENOTFOUND",
+        upstreamOpened: false,
+      }),
+    ),
+  );
+  expect(state.upstreams).toHaveLength(0);
+  expect(state.leased).toBe(false);
+  expect(JSON.stringify(frames)).not.toContain("secret host");
+});
+it.each([
+  ["ERR_TLS_CERT_ALTNAME_INVALID", "TLS_FAILED"],
+  ["CERT_HAS_EXPIRED", "TLS_FAILED"],
+  ["ECONNREFUSED", "TCP_CONNECT_FAILED"],
+  ["ETIMEDOUT", "TCP_CONNECT_FAILED"],
+  ["NOT_ALLOWLISTED_secret", "TCP_CONNECT_FAILED"],
+])(
+  "classifies pre-open %s without forwarding raw errors",
+  async (code, expected) => {
+    const { frames } = await observed();
+    const up = state.upstreams[0];
+    up.emit(
+      "error",
+      Object.assign(new Error("private host headers signature account"), {
+        code,
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(frames).toContainEqual(
+        expect.objectContaining({ code: expected, upstreamOpened: false }),
+      ),
+    );
+    expect(JSON.stringify(frames)).not.toMatch(
+      /private host|signature|NOT_ALLOWLISTED/,
+    );
+    expect(state.leased).toBe(false);
+  },
+);
+it("bounds the whole TCP/TLS/HTTP handshake deadline and cleans up once", async () => {
+  const { frames } = await observed();
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  // Reconnect starts its deadline under the controlled clock.
+  client!.terminate();
+  await new Promise((r) => setImmediate(r));
+  await new Promise<void>((r) => server!.close(() => r()));
+  const second = await observed();
+  await vi.advanceTimersByTimeAsync(5001);
+  await new Promise((r) => setImmediate(r));
+  expect(second.frames).toContainEqual(
+    expect.objectContaining({
+      code: "WS_HANDSHAKE_TIMEOUT",
+      upstreamOpened: false,
+    }),
+  );
+  expect(state.leased).toBe(false);
+  expect(frames.some((f) => f.code === "EXNESS_LIVE")).toBe(false);
+});
+it.each([401, 403, 429, 302])(
+  "reports HTTP %s rejection before open, preserving cooldown",
+  async (status) => {
+    const { frames } = await observed();
+    const response = {
+      statusCode: status,
+      headers: { "retry-after": "17", secret: "private" },
+      destroy: vi.fn(),
+    };
+    state.upstreams[0].emit("unexpected-response", {}, response);
+    await vi.waitFor(() =>
+      expect(frames).toContainEqual(
+        expect.objectContaining({
+          code: status === 429 ? "RATE_LIMITED" : "WS_HTTP_REJECTED",
+          stage: "WS_HTTP_REJECTED",
+          upstreamOpened: false,
+        }),
+      ),
+    );
+    const failure = frames.at(-1);
+    if (status === 429)
+      expect(failure).toMatchObject({
+        rateLimitSource: "EXNESS_WS",
+        retryAfterSec: 17,
+      });
+    expect(state.upstreams).toHaveLength(1);
+    expect(response.destroy).toHaveBeenCalledOnce();
+    expect(JSON.stringify(frames)).not.toContain("private");
+  },
+);
+it("tracks 101, subscription and waiting without claiming LIVE before a fresh tick", async () => {
+  const { frames } = await observed();
+  const up = state.upstreams[0];
+  up.emit("open");
+  await vi.waitFor(() =>
+    expect(frames).toContainEqual(
+      expect.objectContaining({
+        code: "WAITING_FOR_BROKER_TICK",
+        upstreamOpened: true,
+      }),
+    ),
+  );
+  expect(frames.filter((f) => f.type === "status").map((f) => f.code)).toEqual([
+    "WS_CONNECTED",
+    "SUBSCRIPTION_SENT",
+    "WAITING_FOR_BROKER_TICK",
+  ]);
+  up.emit("close");
+  await vi.waitFor(() =>
+    expect(frames).toContainEqual(
+      expect.objectContaining({
+        code: "WS_DISCONNECTED",
+        internalCode: "SOCKET_CLOSED",
+        upstreamOpened: true,
+      }),
+    ),
+  );
+  expect(
+    frames.some((f) => f.type === "tick" || f.code === "EXNESS_LIVE"),
+  ).toBe(false);
+});
+it("preserves post-open classification and pinned DNS all/single contracts", async () => {
+  const { frames } = await observed();
+  const up = state.upstreams[0],
+    cb = vi.fn();
+  up.options.lookup("ap.exness.test", { all: true }, cb);
+  expect(cb).toHaveBeenLastCalledWith(null, [
+    { address: "8.8.8.8", family: 4 },
+  ]);
+  up.options.lookup("ap.exness.test", {}, cb);
+  expect(cb).toHaveBeenLastCalledWith(null, "8.8.8.8", 4);
+  expect(up.options.followRedirects).toBe(false);
+  expect(up.url).toBe(
+    "wss://ap.exness.test/v1/server-events/accounts/123456/ws/ticks",
+  );
+  up.emit("open");
+  up.emit("error", Object.assign(new Error("private"), { code: "ECONNRESET" }));
+  await vi.waitFor(() =>
+    expect(frames).toContainEqual(
+      expect.objectContaining({
+        code: "WS_DISCONNECTED",
+        internalCode: "ECONNRESET",
+        upstreamOpened: true,
+      }),
+    ),
+  );
+});
+
+it("preserves AP SNI, verified TLS and DNS pinning while distinguishing TLS negotiation reset", async () => {
+  const tls = await import("node:tls"),
+    { EventEmitter } = await import("node:events");
+  const connection = new EventEmitter();
+  const connect = vi
+    .spyOn(tls.default, "connect")
+    .mockReturnValue(connection as any);
+  try {
+    const { frames } = await observed(),
+      up = state.upstreams[0];
+    up.options.createConnection({
+      host: "ap.exness.test",
+      port: 443,
+      path: "/sensitive-path",
+      lookup: up.options.lookup,
+    });
+    expect(connect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        host: "ap.exness.test",
+        servername: "ap.exness.test",
+        rejectUnauthorized: true,
+        path: undefined,
+        lookup: up.options.lookup,
+      }),
+    );
+    connection.emit("connect");
+    up.emit(
+      "error",
+      Object.assign(new Error("never serialize host"), { code: "ECONNRESET" }),
+    );
+    await vi.waitFor(() =>
+      expect(frames).toContainEqual(
+        expect.objectContaining({
+          code: "TLS_FAILED",
+          internalCode: "ECONNRESET",
+          upstreamOpened: false,
+        }),
+      ),
+    );
+  } finally {
+    connect.mockRestore();
+  }
+});
+it("reports DNS failures during preflight without upgrading upstream", async () => {
+  server = attachLive(
+    http.createServer((req, res) => {
+      void livePreflight(req, res);
+    }),
+  );
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  state.dnsFailure = "EAI_AGAIN";
+  const r = await fetch(
+    `http://127.0.0.1:${(server.address() as any).port}/api/live/preflight`,
+    { method: "POST", headers: { origin: "https://nexus.test" } },
+  );
+  expect(r.status).toBe(503);
+  expect(await r.json()).toMatchObject({
+    code: "DNS_FAILED",
+    brokerLiveVerified: false,
+    ready: false,
+  });
+  expect(state.upstreams).toHaveLength(0);
+});
