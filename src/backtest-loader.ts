@@ -141,14 +141,17 @@ export async function loadHistory(
       if (response!.ok) fail("INVALID_HISTORY_SCHEMA");
     }
     if (!response!.ok) {
+      const reported = safeCategory(raw.error);
       const category =
         response!.status === 429
           ? "RATE_LIMITED"
-          : response!.status === 401
-            ? "AUTH_REQUIRED"
-            : response!.status === 504
-              ? "TIMEOUT"
-              : safeCategory(raw.error);
+          : reported !== "HISTORY_INTERNAL_FAILURE"
+            ? reported
+            : response!.status === 401
+              ? "AUTH_REQUIRED"
+              : response!.status === 504
+                ? "TIMEOUT"
+                : "HISTORY_INTERNAL_FAILURE";
       const safe = safeHistoryDetails(raw);
       // Only an explicit age/cursor end or an older, provider-confirmed NO_QUOTES response may truncate.
       // Invalid time/count/limit/cursor, auth, timeout and validation errors are never treated as exhaustion.

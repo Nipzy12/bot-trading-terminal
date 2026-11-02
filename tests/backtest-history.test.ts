@@ -611,6 +611,8 @@ describe("long-window pagination and safe diagnostics", () => {
   });
   it.each([
     ["EXNESS_HISTORY_WINDOW", 400],
+    ["EXNESS_AUTH", 401],
+    ["EXNESS_PERMISSION", 403],
     ["TIMEOUT", 504],
     ["secret host or account", 500],
   ] as const)(
