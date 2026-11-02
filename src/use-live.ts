@@ -1,4 +1,6 @@
 import {
+  liveDiagnostic,
+  type LiveDiagnostic,
   networkStages,
   streamStatusLabel,
   preflightCode,
@@ -20,6 +22,7 @@ export function useLive(
     tick: (t: Tick) => void;
     status: (s: string) => void;
     rate?: (r: RateInfo) => void;
+    diagnostic?: (d: LiveDiagnostic | undefined) => void;
   },
 ) {
   const until = useRef(0),
@@ -90,6 +93,7 @@ export function useLive(
       reason = "";
       reasonLabel = "";
       upstreamOpened = false;
+      h.current.diagnostic?.(undefined);
       status("CONNECTING");
       try {
         const r = await fetch(
@@ -125,6 +129,8 @@ export function useLive(
       socket.onmessage = (e) => {
         try {
           const raw = JSON.parse(e.data);
+          if (raw.type === "status" || raw.type === "diagnostic")
+            h.current.diagnostic?.(liveDiagnostic(raw));
           if (raw.type === "basis") {
             const p = z
               .object({
@@ -147,7 +153,7 @@ export function useLive(
             validateBars(p.candles, interval);
             id = p.connectionId;
             h.current.basis(id, p.candles);
-            status("WAITING_FOR_BROKER_TICK");
+            status("CONNECTING");
           } else if (raw.type === "tick" && id) {
             const t = acceptTick(raw, id, symbol, last);
             if (t) {

@@ -1,7 +1,16 @@
-import tls from "node:tls";
-import { networkFailure, type NetworkPhase } from "./live-network.js";
+import {
+  EXNESS_WS_PROTOCOL,
+  pinnedTlsOptions,
+  observeLive,
+  networkFailure,
+  type NetworkPhase,
+} from "./live-network.js";
 import { liveBootstrap } from "./live-cache.js";
-import { rateInfo, type RateInfo } from "../src/live-diagnostics.js";
+import {
+  safeCloseCode,
+  rateInfo,
+  type RateInfo,
+} from "../src/live-diagnostics.js";
 import { liveFailure } from "./live-preflight.js";
 import http from "node:http";
 import { createHmac, randomUUID } from "node:crypto";
@@ -29,7 +38,23 @@ export function attachLive(server: http.Server) {
       hash: string | undefined,
       closed = false;
     let phase: NetworkPhase = "DNS";
-    let upstreamOpened = false;
+    let upstreamOpened = false,
+      subscriptionSent = false,
+      firstValidTickReceived = false;
+    let closeCode: number | undefined, handshakeIssue: string | undefined;
+    const state = () => ({
+      phase,
+      upstreamOpened,
+      subscriptionSent,
+      firstValidTickReceived,
+      ...(closeCode !== undefined ? { closeCode } : {}),
+      ...diagnostic,
+    });
+    const status = (code: string) => {
+      const snapshot = state();
+      send({ type: "status", code, ...snapshot });
+      observeLive(code, snapshot);
+    };
     let handshake: ReturnType<typeof setTimeout> | undefined;
     let diagnostic: Record<string, unknown> = {};
     let timer: ReturnType<typeof setTimeout> | undefined,
@@ -44,7 +69,9 @@ export function attachLive(server: http.Server) {
       clearTimeout(timer);
       clearTimeout(handshake);
       clearInterval(check);
-      send({ type: "status", code, ...diagnostic, upstreamOpened, ...info });
+      const snapshot = state();
+      send({ type: "status", code, ...snapshot, ...info });
+      observeLive(code, snapshot);
       upstream?.terminate();
       client?.close(1000);
       if (!client) socket.destroy();
@@ -176,7 +203,14 @@ export function attachLive(server: http.Server) {
       if (!(await valid())) throw new ProviderError("CONNECTION_DELETED", 409);
       if (closed) return;
       send({ type: "basis", connectionId: row.id, symbol, interval, candles });
+      const upstreamHeaders = signedHeaders(
+        config.apiKey,
+        loadKey(config.privateKey),
+        prepared.path,
+      );
       phase = "TCP";
+      send({ type: "diagnostic", ...state() });
+      observeLive("PHASE_CHANGED", state());
       handshake = setTimeout(() => {
         diagnostic = {
           stage: "WS_HANDSHAKE_TIMEOUT",
@@ -186,37 +220,21 @@ export function attachLive(server: http.Server) {
       }, 5000);
       upstream = new WebSocket(
         host.replace(/^https:/, "wss:") + prepared.path,
+        EXNESS_WS_PROTOCOL,
         {
-          headers: signedHeaders(
-            config.apiKey,
-            loadKey(config.privateKey),
-            prepared.path,
-          ),
+          perMessageDeflate: false,
+          headers: upstreamHeaders,
           followRedirects: false,
           // Our wall-clock deadline also bounds TCP and TLS, without parsing ws errors.
           handshakeTimeout: 6000,
-          createConnection: ((options: tls.ConnectionOptions) => {
-            // Preserve the validated AP hostname for SNI/certificate checks. Never dial
-            // an IP URL, bypass verification, use a proxy, or follow redirects.
-            const connection = tls.connect({
-              ...options,
-              path: undefined,
-              servername: new URL(host).hostname,
-              rejectUnauthorized: true,
-            } as tls.ConnectionOptions);
-            connection.once("connect", () => {
-              phase = "TLS";
-            });
-            connection.once("secureConnect", () => {
-              phase = "HANDSHAKE";
-            });
-            return connection;
-          }) as typeof import("node:net").createConnection,
+          ...pinnedTlsOptions(new URL(host).hostname, addresses, (next) => {
+            if (!closed) {
+              phase = next;
+              send({ type: "diagnostic", ...state() });
+              observeLive("PHASE_CHANGED", state());
+            }
+          }),
           maxPayload: 16384,
-          lookup: (_host, options, cb) => {
-            if ((options as { all?: boolean }).all) cb(null, addresses as any);
-            else cb(null, addresses[0].address, addresses[0].family);
-          },
         },
       );
       let last = 0,
@@ -224,27 +242,43 @@ export function attachLive(server: http.Server) {
       client?.on("pong", () => {
         lastPong = Date.now();
       });
+      upstream.on("upgrade", (response) => {
+        // Compare only to the documented constant. Never forward/log header values.
+        const protocol = response.headers["sec-websocket-protocol"];
+        if (protocol !== EXNESS_WS_PROTOCOL)
+          handshakeIssue =
+            protocol === undefined
+              ? "WS_SUBPROTOCOL_MISSING"
+              : "WS_SUBPROTOCOL_MISMATCH";
+      });
       upstream.on("open", () => {
         if (closed) return;
         clearTimeout(handshake);
         phase = "OPEN";
         upstreamOpened = true;
-        send({ type: "status", code: "WS_CONNECTED", upstreamOpened });
-        upstream?.send(subscription, (error?: Error) => {
+        status("WS_CONNECTED");
+        const sent = (error?: Error) => {
           if (closed) return;
           if (error) {
-            diagnostic = networkFailure(error, phase);
+            diagnostic = {
+              stage: "WS_DISCONNECTED",
+              internalCode: "SUBSCRIPTION_SEND_FAILED",
+            };
             stop("WS_DISCONNECTED");
             return;
           }
-          send({ type: "status", code: "SUBSCRIPTION_SENT", upstreamOpened });
-          if (!last)
-            send({
-              type: "status",
-              code: "WAITING_FOR_BROKER_TICK",
-              upstreamOpened,
-            });
-        });
+          subscriptionSent = true;
+          // A late write callback must not replace a valid tick with WAITING.
+          if (!firstValidTickReceived) {
+            status("SUBSCRIPTION_SENT");
+            status("WAITING_FOR_BROKER_TICK");
+          } else send({ type: "diagnostic", ...state() });
+        };
+        try {
+          upstream?.send(subscription, sent);
+        } catch {
+          sent(new Error());
+        }
       });
       upstream.on("message", (bytes) => {
         if (closed || !upstreamOpened) return;
@@ -283,6 +317,11 @@ export function attachLive(server: http.Server) {
             stop("SLOW_CLIENT");
             return;
           }
+          if (!firstValidTickReceived) {
+            firstValidTickReceived = true;
+            observeLive("EXNESS_LIVE", state());
+            send({ type: "diagnostic", ...state() });
+          }
           send({ type: "tick", ...t });
         } catch {
           stop("INVALID_RESPONSE");
@@ -316,10 +355,21 @@ export function attachLive(server: http.Server) {
       upstream.on("error", (error) => {
         if (closed) return;
         diagnostic = networkFailure(error, phase);
+        if (
+          !upstreamOpened &&
+          phase === "HANDSHAKE" &&
+          handshakeIssue &&
+          diagnostic.internalCode === "WS_HANDSHAKE_ERROR_NO_CODE"
+        )
+          diagnostic.internalCode = handshakeIssue;
         stop(String(diagnostic.stage));
       });
-      upstream.on("close", () => {
-        if (closed) return;
+      upstream.on("close", (code) => {
+        closeCode = safeCloseCode(code);
+        if (closed) {
+          observeLive("WS_CLOSE_OBSERVED", state());
+          return;
+        }
         diagnostic = {
           stage: "WS_DISCONNECTED",
           internalCode: upstreamOpened ? "SOCKET_CLOSED" : "CLOSED_BEFORE_OPEN",

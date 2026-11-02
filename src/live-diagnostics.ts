@@ -16,12 +16,22 @@ export const networkCodes = [
   "ERR_SSL_WRONG_VERSION_NUMBER",
   "ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION",
   "ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE",
+  "WS_ERR_EXPECTED_FIN",
+  "WS_ERR_EXPECTED_MASK",
+  "WS_ERR_INVALID_CLOSE_CODE",
+  "WS_ERR_INVALID_CONTROL_PAYLOAD_LENGTH",
+  "WS_ERR_INVALID_OPCODE",
+  "WS_ERR_UNEXPECTED_MASK",
+  "WS_ERR_UNSUPPORTED_DATA_PAYLOAD_LENGTH",
+  "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH",
+  "WS_ERR_INVALID_UTF8",
 ] as const;
 export const networkStages = [
   "DNS_FAILED",
   "TCP_CONNECT_FAILED",
   "TLS_FAILED",
   "WS_HANDSHAKE_TIMEOUT",
+  "WS_HANDSHAKE_FAILED",
   "WS_HTTP_REJECTED",
   "WS_CONNECTED",
   "SUBSCRIPTION_SENT",
@@ -79,6 +89,74 @@ export function rateInfo(value: unknown): RateInfo {
   };
 }
 
+export const networkPhases = [
+  "DNS",
+  "TCP",
+  "TLS",
+  "HANDSHAKE",
+  "OPEN",
+] as const;
+export type NetworkPhase = (typeof networkPhases)[number];
+export const internalCodes = [
+  ...networkCodes,
+  "NETWORK_ERROR",
+  "NETWORK_CODE_UNCLASSIFIED",
+  "DNS_ERROR_NO_CODE",
+  "TCP_ERROR_NO_CODE",
+  "TLS_ERROR_NO_CODE",
+  "WS_HANDSHAKE_ERROR_NO_CODE",
+  "WS_OPEN_ERROR_NO_CODE",
+  "WS_SUBPROTOCOL_MISSING",
+  "WS_SUBPROTOCOL_MISMATCH",
+  "SUBSCRIPTION_SEND_FAILED",
+  "HANDSHAKE_DEADLINE",
+  "HTTP_REJECTED",
+  "SOCKET_CLOSED",
+  "CLOSED_BEFORE_OPEN",
+] as const;
+export const standardCloseCodes = [
+  1000, 1001, 1002, 1003, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013,
+  1014, 1015,
+] as const;
+export function safeCloseCode(code: unknown) {
+  return typeof code === "number" &&
+    (standardCloseCodes as readonly number[]).includes(code)
+    ? code
+    : undefined;
+}
+export type LiveDiagnostic = {
+  phase: NetworkPhase;
+  upstreamOpened: boolean;
+  subscriptionSent: boolean;
+  firstValidTickReceived: boolean;
+  closeCode?: number;
+  internalCode?: string;
+};
+export function liveDiagnostic(value: unknown): LiveDiagnostic | undefined {
+  if (!value || typeof value !== "object") return;
+  const v = value as Record<string, unknown>;
+  if (
+    !(networkPhases as readonly unknown[]).includes(v.phase) ||
+    [v.upstreamOpened, v.subscriptionSent, v.firstValidTickReceived].some(
+      (v) => typeof v !== "boolean",
+    )
+  )
+    return;
+  return {
+    phase: v.phase as NetworkPhase,
+    upstreamOpened: v.upstreamOpened as boolean,
+    subscriptionSent: v.subscriptionSent as boolean,
+    firstValidTickReceived: v.firstValidTickReceived as boolean,
+    ...(safeCloseCode(v.closeCode) !== undefined
+      ? { closeCode: safeCloseCode(v.closeCode) }
+      : {}),
+    ...(typeof v.internalCode === "string" &&
+    (internalCodes as readonly string[]).includes(v.internalCode)
+      ? { internalCode: v.internalCode }
+      : {}),
+  };
+}
+
 // Only known enums and selected HTTP statuses may reach the status text.
 export function streamStatusLabel(code: string, value: unknown) {
   const v =
@@ -94,14 +172,7 @@ export function streamStatusLabel(code: string, value: unknown) {
     parts.push(`HTTP ${v.httpStatus}`);
   if (
     typeof v.internalCode === "string" &&
-    [
-      ...networkCodes,
-      "NETWORK_ERROR",
-      "HANDSHAKE_DEADLINE",
-      "HTTP_REJECTED",
-      "SOCKET_CLOSED",
-      "CLOSED_BEFORE_OPEN",
-    ].includes(v.internalCode)
+    (internalCodes as readonly string[]).includes(v.internalCode)
   )
     parts.push(v.internalCode);
   return parts.join(" · ");

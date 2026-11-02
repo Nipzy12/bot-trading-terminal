@@ -1777,3 +1777,14 @@ main {
 .account .broker-monitor button {
   margin: 4px 0;
 }
+
+.live-diagnostic {
+  display: block;
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.6;
+}
+.feed-warning:has(.live-diagnostic) {
+  flex-wrap: wrap;
+}

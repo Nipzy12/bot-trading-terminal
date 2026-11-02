@@ -1,5 +1,5 @@
 import { BrokerMonitor } from "./BrokerMonitor";
-import type { RateInfo } from "./live-diagnostics";
+import type { LiveDiagnostic, RateInfo } from "./live-diagnostics";
 import { useLive } from "./use-live";
 import { updateBars } from "./live";
 import React, { useEffect, useRef, useState } from "react";
@@ -228,9 +228,13 @@ function App() {
   }
   const [liveAsk, setLiveAsk] = useState<number | undefined>();
   const [liveStatus, setLiveStatus] = useState("CONNECTING");
+  const [liveDiagnostic, setLiveDiagnostic] = useState<
+    LiveDiagnostic | undefined
+  >();
   const [liveRate, setLiveRate] = useState<RateInfo>({});
   const liveCooldown = useLive(liveMode, symbol, Number(interval), feedEpoch, {
     rate: setLiveRate,
+    diagnostic: setLiveDiagnostic,
     basis: (id, bars) => {
       setLiveRate({});
       setQuotes(emptyQuotes());
@@ -622,6 +626,18 @@ function App() {
               <span> · {liveRate.rateLimitSource}</span>
             )}
             {liveCooldown > 0 && <span> · Cooldown {liveCooldown} detik</span>}
+            {liveDiagnostic && (
+              <small className="live-diagnostic">
+                phase={liveDiagnostic.phase} · upstreamOpened=
+                {String(liveDiagnostic.upstreamOpened)} · subscriptionSent=
+                {String(liveDiagnostic.subscriptionSent)} ·
+                firstValidTickReceived=
+                {String(liveDiagnostic.firstValidTickReceived)}
+                {liveDiagnostic.closeCode !== undefined && (
+                  <> · closeCode={liveDiagnostic.closeCode}</>
+                )}
+              </small>
+            )}
             <button
               disabled={liveCooldown > 0}
               onClick={() => setFeedEpoch((n) => n + 1)}

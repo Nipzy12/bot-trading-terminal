@@ -10,17 +10,25 @@ const state = vi.hoisted(() => ({
   rate: true,
   failure: "",
   dnsFailure: "",
+  sendFailure: "",
 }));
 vi.mock("ws", async () => {
   const actual = await vi.importActual<typeof import("ws")>("ws"),
     { EventEmitter } = await import("node:events");
   class Upstream extends EventEmitter {
     static OPEN = 1;
-    send = vi.fn((_data: string, callback?: (error?: Error) => void) =>
-      callback?.(),
-    );
+    send = vi.fn((_data: string, callback?: (error?: Error) => void) => {
+      if (state.sendFailure === "throw")
+        throw new Error("private subscription context");
+      callback?.(
+        state.sendFailure === "callback"
+          ? new Error("private subscription context")
+          : undefined,
+      );
+    });
     constructor(
       public url: string,
+      public protocol: string,
       public options: any,
     ) {
       super();
@@ -78,12 +86,13 @@ vi.mock("../server/database", () => ({
     },
   }),
 }));
-beforeEach(() =>
+beforeEach(() => {
+  vi.spyOn(console, "info").mockImplementation(() => {});
   vi.stubEnv(
     "BETTER_AUTH_SECRET",
     "synthetic-long-test-auth-secret-32-characters",
-  ),
-);
+  );
+});
 const keys = generateKeyPairSync("ed25519");
 vi.mock("../server/vault", () => ({
   decrypt: () => ({
@@ -134,7 +143,9 @@ afterEach(async () => {
   state.rate = true;
   state.failure = "";
   state.dnsFailure = "";
+  state.sendFailure = "";
   vi.useRealTimers();
+  vi.restoreAllMocks();
   state.leased = false;
   state.upstreams = [];
 });
@@ -552,3 +563,227 @@ it("reports DNS failures during preflight without upgrading upstream", async () 
   });
   expect(state.upstreams).toHaveLength(0);
 });
+
+it.each(["TCP", "TLS", "HANDSHAKE"] as const)(
+  "retains %s evidence for a code-less pre-open error",
+  async (phase) => {
+    const { frames } = await observed(),
+      up = state.upstreams[0];
+    const tls = await import("node:tls"),
+      { EventEmitter } = await import("node:events"),
+      connection = new EventEmitter();
+    const connect = vi
+      .spyOn(tls.default, "connect")
+      .mockReturnValue(connection as any);
+    try {
+      up.options.createConnection({
+        host: "ap.exness.test",
+        port: 443,
+        lookup: up.options.lookup,
+      });
+      if (phase !== "TCP") connection.emit("connect");
+      if (phase === "HANDSHAKE") connection.emit("secureConnect");
+      up.emit("error", new Error("DO_NOT_LOG host IP account headers"));
+      await vi.waitFor(() =>
+        expect(frames).toContainEqual(
+          expect.objectContaining({
+            code:
+              phase === "TCP"
+                ? "TCP_CONNECT_FAILED"
+                : phase === "TLS"
+                  ? "TLS_FAILED"
+                  : "WS_HANDSHAKE_FAILED",
+            phase,
+            upstreamOpened: false,
+            subscriptionSent: false,
+            firstValidTickReceived: false,
+            internalCode:
+              phase === "HANDSHAKE"
+                ? "WS_HANDSHAKE_ERROR_NO_CODE"
+                : `${phase}_ERROR_NO_CODE`,
+          }),
+        ),
+      );
+      expect(JSON.stringify(vi.mocked(console.info).mock.calls)).not.toContain(
+        "DO_NOT_LOG",
+      );
+    } finally {
+      connect.mockRestore();
+    }
+  },
+);
+it.each(["callback", "throw"])(
+  "handles %s subscription send failure without claiming it was sent",
+  async (mode) => {
+    state.sendFailure = mode;
+    const { frames } = await observed(),
+      up = state.upstreams[0];
+    up.emit("open");
+    await vi.waitFor(() =>
+      expect(frames).toContainEqual(
+        expect.objectContaining({
+          code: "WS_DISCONNECTED",
+          phase: "OPEN",
+          upstreamOpened: true,
+          subscriptionSent: false,
+          firstValidTickReceived: false,
+          internalCode: "SUBSCRIPTION_SEND_FAILED",
+        }),
+      ),
+    );
+    expect(state.leased).toBe(false);
+    expect(JSON.stringify(frames)).not.toContain(
+      "private subscription context",
+    );
+    expect(frames.some((f) => f.code === "SUBSCRIPTION_SENT")).toBe(false);
+  },
+);
+it("distinguishes OPEN then code-less error before first tick, with no retry or fabricated tick", async () => {
+  const { frames } = await observed(),
+    up = state.upstreams[0];
+  expect(up.protocol).toBe("exness-ws-protocol");
+  expect(up.options.perMessageDeflate).toBe(false);
+  up.emit("open");
+  up.emit("error", new Error("private"));
+  await vi.waitFor(() =>
+    expect(frames).toContainEqual(
+      expect.objectContaining({
+        code: "WS_DISCONNECTED",
+        phase: "OPEN",
+        upstreamOpened: true,
+        subscriptionSent: true,
+        firstValidTickReceived: false,
+        internalCode: "WS_OPEN_ERROR_NO_CODE",
+      }),
+    ),
+  );
+  expect(state.upstreams).toHaveLength(1);
+  expect(frames.some((f) => f.type === "tick")).toBe(false);
+});
+it.each([1000, 1006, 1011, 4001])(
+  "only exposes standard close codes (%s), without raw close reason",
+  async (closeCode) => {
+    const { frames } = await observed(),
+      up = state.upstreams[0];
+    up.emit("open");
+    up.emit(
+      "close",
+      closeCode,
+      Buffer.from("DO_NOT_DISPLAY_PRIVATE_CLOSE_REASON"),
+    );
+    await vi.waitFor(() =>
+      expect(frames.at(-1)).toMatchObject({
+        code: "WS_DISCONNECTED",
+        phase: "OPEN",
+        upstreamOpened: true,
+        subscriptionSent: true,
+        firstValidTickReceived: false,
+      }),
+    );
+    expect(frames.at(-1).closeCode).toBe(
+      closeCode === 4001 ? undefined : closeCode,
+    );
+    expect(
+      JSON.stringify(frames) +
+        JSON.stringify(vi.mocked(console.info).mock.calls),
+    ).not.toContain("DO_NOT_DISPLAY");
+  },
+);
+it("records the first valid fresh tick once, rejecting invalid/foreign/stale ticks without logging frames", async () => {
+  const { frames } = await observed(),
+    up = state.upstreams[0];
+  up.emit("open");
+  const tick = {
+    instrument: "XAUUSDm",
+    bid: 3900,
+    ask: 3901,
+    timestamp: new Date().toISOString(),
+  };
+  for (const invalid of [
+    { ...tick, instrument: "EURUSD" },
+    { ...tick, bid: -1 },
+    { ...tick, timestamp: new Date(Date.now() - 60000).toISOString() },
+  ])
+    up.emit("message", Buffer.from(JSON.stringify(invalid)));
+  up.emit("message", Buffer.from(JSON.stringify(tick)));
+  await vi.waitFor(() =>
+    expect(frames.filter((f) => f.type === "tick")).toHaveLength(1),
+  );
+  up.emit("close", 1001, Buffer.from("private reason"));
+  await vi.waitFor(() =>
+    expect(frames.at(-1)).toMatchObject({
+      code: "WS_DISCONNECTED",
+      phase: "OPEN",
+      upstreamOpened: true,
+      subscriptionSent: true,
+      firstValidTickReceived: true,
+      closeCode: 1001,
+    }),
+  );
+  const logs = vi
+    .mocked(console.info)
+    .mock.calls.map(([line]) => JSON.parse(line));
+  expect(logs.filter((l) => l.stage === "EXNESS_LIVE")).toHaveLength(1);
+  for (const log of logs)
+    expect(Object.keys(log)).toEqual(
+      expect.arrayContaining([
+        "event",
+        "stage",
+        "phase",
+        "upstreamOpened",
+        "subscriptionSent",
+        "firstValidTickReceived",
+      ]),
+    );
+  for (const secret of [
+    "123456",
+    "EXN-",
+    "ap.exness.test",
+    "synthetic-key",
+    "private reason",
+    "3900",
+    "timestamp",
+  ])
+    expect(JSON.stringify(logs)).not.toContain(secret);
+});
+it.each([undefined, "not-the-documented-protocol"])(
+  "reports a code-less subprotocol rejection without logging headers",
+  async (protocol) => {
+    const { frames } = await observed(),
+      up = state.upstreams[0];
+    const tls = await import("node:tls"),
+      { EventEmitter } = await import("node:events"),
+      connection = new EventEmitter();
+    const connect = vi
+      .spyOn(tls.default, "connect")
+      .mockReturnValue(connection as any);
+    try {
+      up.options.createConnection({
+        host: "ap.exness.test",
+        port: 443,
+        lookup: up.options.lookup,
+      });
+      connection.emit("connect");
+      connection.emit("secureConnect");
+      up.emit("upgrade", { headers: { "sec-websocket-protocol": protocol } });
+      up.emit("error", new Error("raw handshake failure"));
+      await vi.waitFor(() =>
+        expect(frames).toContainEqual(
+          expect.objectContaining({
+            code: "WS_HANDSHAKE_FAILED",
+            phase: "HANDSHAKE",
+            upstreamOpened: false,
+            internalCode: protocol
+              ? "WS_SUBPROTOCOL_MISMATCH"
+              : "WS_SUBPROTOCOL_MISSING",
+          }),
+        ),
+      );
+      expect(JSON.stringify(frames)).not.toContain(
+        "not-the-documented-protocol",
+      );
+    } finally {
+      connect.mockRestore();
+    }
+  },
+);

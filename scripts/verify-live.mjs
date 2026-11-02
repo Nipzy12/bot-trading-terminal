@@ -58,10 +58,25 @@ try {
       (code) =>
         window.sockets
           .at(-1)
-          .emit({ type: "status", code, upstreamOpened: true }),
+          .emit({
+            type: "status",
+            code,
+            phase: "OPEN",
+            upstreamOpened: true,
+            subscriptionSent: code !== "WS_CONNECTED",
+            firstValidTickReceived: false,
+          }),
       code,
     );
     await page.getByRole("status").filter({ hasText: code }).waitFor();
+    await page
+      .locator(".live-diagnostic")
+      .filter({ hasText: "phase=OPEN" })
+      .waitFor();
+    assert.match(
+      await page.locator(".live-diagnostic").textContent(),
+      /firstValidTickReceived=false/,
+    );
     assert.equal(
       await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),
       true,
@@ -137,6 +152,7 @@ try {
     "TCP_CONNECT_FAILED",
     "TLS_FAILED",
     "WS_HANDSHAKE_TIMEOUT",
+    "WS_HANDSHAKE_FAILED",
     "WS_HTTP_REJECTED",
     "WS_DISCONNECTED",
   ]) {
@@ -148,11 +164,39 @@ try {
         internalCode: "ERR_TLS_CERT_ALTNAME_INVALID",
         httpStatus: 403,
         rawError: "DO_NOT_DISPLAY_PRIVATE",
-        upstreamOpened: false,
+        phase:
+          code === "DNS_FAILED"
+            ? "DNS"
+            : code === "TCP_CONNECT_FAILED"
+              ? "TCP"
+              : code === "TLS_FAILED"
+                ? "TLS"
+                : code === "WS_DISCONNECTED"
+                  ? "OPEN"
+                  : "HANDSHAKE",
+        upstreamOpened: code === "WS_DISCONNECTED",
+        subscriptionSent: code === "WS_DISCONNECTED",
+        firstValidTickReceived: false,
+        closeCode: 1006,
       });
       socket.onclose?.();
     }, code);
     await page.getByRole("status").filter({ hasText: code }).waitFor();
+    const diagnostics = page.locator(".live-diagnostic");
+    assert.match(
+      await diagnostics.textContent(),
+      /firstValidTickReceived=false/,
+    );
+    assert.match(await diagnostics.textContent(), /closeCode=1006/);
+    for (const width of [360, 390, 412]) {
+      await page.setViewportSize({ width, height: 844 });
+      assert.equal(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+        true,
+      );
+    }
     assert.equal(
       await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),
       true,
