@@ -118,6 +118,20 @@ try {
     .getByRole("button", { name: "Connect Exness", exact: true })
     .click();
   await page
+    .getByLabel(
+      "Broker API Key scope (deklarasi pengguna, belum diverifikasi)",
+      { exact: true },
+    )
+    .selectOption("full");
+  assert.match(
+    await page.getByRole("note").innerText(),
+    /Full Access tetap memiliki izin luas/,
+  );
+  assert.match(
+    await page.getByRole("checkbox").locator("..").innerText(),
+    /tidak mengubah scope API Key Exness/,
+  );
+  await page
     .getByLabel("Nama koneksi", { exact: true })
     .fill("Private workspace");
   await page

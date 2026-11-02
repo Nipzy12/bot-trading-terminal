@@ -19,7 +19,7 @@ describe("safe market backend", () => {
   it("defaults to simulation and rejects live execution", async () => {
     const health = await request(app).get("/api/health");
     expect(health.body.liveTrading).toBe(false);
-    for (const method of ["post", "get"] as const) {
+    for (const method of ["post", "get", "put", "patch", "delete"] as const) {
       expect(
         (await request(app)[method]("/api/orders").send({ symbol: "XAUUSD" }))
           .status,

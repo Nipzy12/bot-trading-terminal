@@ -2,13 +2,21 @@ import { z } from "zod";
 import type { Bar } from "./backtest";
 export const tickSchema = z
   .object({
+    provider: z.literal("EXNESS").optional(),
+    source: z.literal("EXNESS_LIVE").optional(),
+    freshness: z.literal("FRESH").optional(),
+    timestampMs: z.number().int().positive().optional(),
     symbol: z.string(),
     connectionId: z.uuid(),
     time: z.number().int().positive(),
     bid: z.number().positive(),
     ask: z.number().positive(),
   })
-  .refine((t) => t.ask >= t.bid);
+  .refine(
+    (t) =>
+      t.ask >= t.bid &&
+      (t.timestampMs === undefined || t.timestampMs === t.time),
+  );
 export type Tick = z.infer<typeof tickSchema>;
 export function acceptTick(
   raw: unknown,
@@ -53,3 +61,39 @@ export function updateBars(bars: Bar[], tick: Tick, interval: number): Bar[] {
 }
 export const reconnectDelay = (attempt: number) =>
   Math.min(60000, 5000 * 2 ** Math.min(attempt, 4));
+
+// Official WSTick is a flat instrument/bid/ask/ISO timestamp object; no invented envelope aliases.
+const brokerTick = z.object({
+  instrument: z.string(),
+  bid: z.number().positive(),
+  ask: z.number().positive(),
+  timestamp: z.iso.datetime({ offset: true }),
+});
+export function normalizeBrokerTick(
+  raw: unknown,
+  instrument: string,
+  id: string,
+  symbol: string,
+  last: number,
+  now = Date.now(),
+) {
+  const p = brokerTick.safeParse(raw);
+  if (!p.success || p.data.instrument !== instrument) return null;
+  const time = Date.parse(p.data.timestamp),
+    t = acceptTick(
+      { connectionId: id, symbol, time, bid: p.data.bid, ask: p.data.ask },
+      id,
+      symbol,
+      last,
+      now,
+    );
+  return t
+    ? {
+        ...t,
+        provider: "EXNESS" as const,
+        source: "EXNESS_LIVE" as const,
+        freshness: "FRESH" as const,
+        timestampMs: time,
+      }
+    : null;
+}

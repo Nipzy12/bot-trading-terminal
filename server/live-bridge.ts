@@ -1,7 +1,6 @@
 import { liveBootstrap } from "./live-cache.js";
 import { rateInfo, type RateInfo } from "../src/live-diagnostics.js";
 import { liveFailure } from "./live-preflight.js";
-import { z } from "zod";
 import http from "node:http";
 import { createHmac, randomUUID } from "node:crypto";
 import { WebSocket, WebSocketServer } from "ws";
@@ -18,7 +17,7 @@ import {
 } from "./exness.js";
 import { safeOrigin, resolveHost } from "./ssrf.js";
 import { bounded } from "./connection-test.js";
-import { acceptTick } from "../src/live.js";
+import { normalizeBrokerTick } from "../src/live.js";
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 });
 export function attachLive(server: http.Server) {
   server.on("upgrade", async (req, socket, head) => {
@@ -179,7 +178,11 @@ export function attachLive(server: http.Server) {
           },
         },
       );
-      let last = 0;
+      let last = 0,
+        lastPong = Date.now();
+      client?.on("pong", () => {
+        lastPong = Date.now();
+      });
       upstream.on("open", () => upstream?.send(subscription));
       upstream.on("message", (bytes) => {
         try {
@@ -204,22 +207,9 @@ export function attachLive(server: http.Server) {
             stop("INVALID_RESPONSE");
             return;
           }
-          if (raw.instrument !== prepared.instrument) return;
-          if (
-            !z.iso.datetime({ offset: true }).safeParse(raw.timestamp).success
-          )
-            return;
-          const t = acceptTick(
-            {
-              symbol,
-              connectionId: row.id,
-              time:
-                typeof raw.timestamp === "string"
-                  ? Date.parse(raw.timestamp)
-                  : NaN,
-              bid: raw.bid,
-              ask: raw.ask,
-            },
+          const t = normalizeBrokerTick(
+            raw,
+            prepared.instrument,
             row.id,
             symbol,
             last,
@@ -256,6 +246,11 @@ export function attachLive(server: http.Server) {
       upstream.on("error", () => stop("EXNESS_NETWORK"));
       upstream.on("close", () => stop());
       check = setInterval(() => {
+        if (Date.now() - lastPong > 6000) {
+          stop("DISCONNECTED");
+          return;
+        }
+        if (client?.readyState === WebSocket.OPEN) client.ping();
         void valid()
           .then((ok) => {
             if (!ok) stop("AUTH_REVOKED");

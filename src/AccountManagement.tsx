@@ -16,6 +16,7 @@ type Connection = {
 };
 type Session = { user: { name: string }; csrfToken: string };
 export function AccountManagement() {
+  const [brokerScope, setBrokerScope] = useState("unknown");
   const [enabled, setEnabled] = useState<boolean | null>(null),
     [session, setSession] = useState<Session | null>(null),
     [accounts, setAccounts] = useState<Connection[]>([]),
@@ -176,7 +177,9 @@ export function AccountManagement() {
         <span className="eyebrow">PRIVATE WORKSPACE</span>
         <h1>Account Management</h1>
         <p>
-          Koneksi Exness read-only. Semua order, SL/TP dan robot tetap simulasi.
+          Kebijakan NEXUS: operasi baca-saja. Scope API Key Exness belum
+          diverifikasi dan tidak diubah oleh aplikasi. Semua order, SL/TP dan
+          robot tetap simulasi.
         </p>
       </section>
       {message && (
@@ -346,11 +349,29 @@ export function AccountManagement() {
           </section>
           {showConnect && (
             <section className="panel account-box">
-              <h2>Connect Exness · read-only</h2>
+              <h2>Connect Exness · kebijakan baca-saja</h2>
               <p>
-                Gunakan API key dengan Trading read access dari Key Management.
-                Form dikirim melalui HTTPS ke backend, tanpa penyimpanan
-                browser. Key tidak dapat dibaca kembali setelah disimpan.
+                Scope broker ditentukan di Key Management Exness, bukan oleh
+                checkbox ini. NEXUS hanya mengirim GET dan subscription data
+                market. Form dikirim melalui HTTPS ke backend; kredensial tidak
+                disimpan di browser dan tidak dapat dibaca kembali.
+              </p>
+              <label htmlFor="broker-scope">
+                Broker API Key scope (deklarasi pengguna, belum diverifikasi)
+              </label>
+              <select
+                id="broker-scope"
+                value={brokerScope}
+                onChange={(e) => setBrokerScope(e.target.value)}
+              >
+                <option value="unknown">Belum diketahui</option>
+                <option value="read">Trading read access</option>
+                <option value="full">Full Access</option>
+              </select>
+              <p role="note">
+                {brokerScope === "full"
+                  ? "Full Access tetap memiliki izin luas di Exness. NEXUS tidak mengubah atau mempersempit izin key tersebut; jangan anggap key ini read-only."
+                  : "Scope broker belum diverifikasi oleh NEXUS. Pilihan ini hanya deklarasi, bukan perubahan izin."}
               </p>
               <form onSubmit={connect} autoComplete="off">
                 <label>
@@ -409,8 +430,8 @@ export function AccountManagement() {
                 </label>
                 <label className="read-only-confirm">
                   <input type="checkbox" required />
-                  Saya menggunakan koneksi data read-only. Tidak ada broker
-                  order yang akan diaktifkan.
+                  Saya memahami kebijakan operasi baca-saja NEXUS tidak mengubah
+                  scope API Key Exness. NEXUS tidak mengirim broker order.
                 </label>
                 <button disabled={busy} type="submit" className="primary">
                   Simpan terenkripsi

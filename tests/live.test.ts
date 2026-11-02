@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { acceptTick, updateBars, reconnectDelay } from "../src/live";
+import {
+  acceptTick,
+  updateBars,
+  reconnectDelay,
+  normalizeBrokerTick,
+} from "../src/live";
 import {
   fresh,
   openPosition,
@@ -83,5 +88,66 @@ describe("live ticks and paper isolation", () => {
   it("bounds exponential reconnect delay", () => {
     expect(reconnectDelay(0)).toBe(5000);
     expect(reconnectDelay(10)).toBe(60000);
+  });
+});
+
+describe("official Exness WSTick normalization", () => {
+  const raw = {
+    instrument: "XAUUSDm",
+    bid: 3900,
+    ask: 3901,
+    timestamp: new Date(now).toISOString(),
+  };
+  it("normalizes flat broker frames without raw metadata or credentials", () => {
+    const t = normalizeBrokerTick(
+      { ...raw, privateField: "not-forwarded" },
+      "XAUUSDm",
+      id,
+      "XAUUSD",
+      0,
+      now,
+    )!;
+    expect(t).toMatchObject({
+      provider: "EXNESS",
+      source: "EXNESS_LIVE",
+      freshness: "FRESH",
+      timestampMs: now,
+      connectionId: id,
+      symbol: "XAUUSD",
+    });
+    expect(JSON.stringify(t)).not.toContain("not-forwarded");
+    expect(acceptTick(t, id, "XAUUSD", 0, now)).not.toBeNull();
+  });
+  it("rejects unsupported envelopes, stale/out-of-order ticks and schema violations", () => {
+    for (const bad of [
+      { data: raw },
+      { ...raw, instrument: "EURUSD" },
+      { ...raw, bid: "3900" },
+      { ...raw, ask: 3800 },
+      { ...raw, timestamp: "2026-11-02T10:00:00" },
+      { ...raw, timestamp: new Date(now - 11000).toISOString() },
+    ])
+      expect(
+        normalizeBrokerTick(bad, "XAUUSDm", id, "XAUUSD", 0, now),
+      ).toBeNull();
+    expect(
+      normalizeBrokerTick(raw, "XAUUSDm", id, "XAUUSD", now, now),
+    ).toBeNull();
+    expect(
+      acceptTick(
+        {
+          connectionId: id,
+          symbol: "XAUUSD",
+          bid: 3900,
+          ask: 3901,
+          time: now,
+          timestampMs: now + 1,
+        },
+        id,
+        "XAUUSD",
+        0,
+        now,
+      ),
+    ).toBeNull();
   });
 });
