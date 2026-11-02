@@ -24,7 +24,7 @@ function fixture(failAt?: string, fail?: () => Promise<Response>) {
           : u.pathname.endsWith("/limits")
             ? "limits"
             : "candles";
-      seen.push(stage);
+      if (!u.pathname.endsWith("/instruments")) seen.push(stage);
       const headers = init!.headers as Record<string, string>;
       const payload = Buffer.from(headers["EXN-DATA"], "base64url");
       const signed = JSON.parse(payload.toString());
@@ -44,6 +44,8 @@ function fixture(failAt?: string, fail?: () => Promise<Response>) {
           Buffer.from(headers["EXN-SIGN"], "base64url"),
         ),
       ).toBe(true);
+      if (u.pathname.endsWith("/instruments"))
+        return Response.json({ instruments: ["XAUUSD"] });
       if (stage === failAt) return fail!();
       if (stage === "discovery")
         return Response.json({
@@ -103,6 +105,7 @@ describe("fresh staged Exness read-only probe", () => {
     const report = await reader.testConnection();
     expect(report).toEqual({
       success: true,
+      candleCount: 2,
       stages: connectionStages.map((stage) => ({ stage, status: "passed" })),
     });
     expect(seen).toEqual(connectionStages);

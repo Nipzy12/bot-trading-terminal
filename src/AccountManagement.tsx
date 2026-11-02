@@ -3,6 +3,7 @@ import {
   parseReport,
   stageLabels,
   categoryMessages,
+  candleReasonLabels,
   type ClientReport,
 } from "./connection-report";
 type Connection = {
@@ -41,7 +42,7 @@ export function AccountManagement() {
       if (r.status === 401) setSession(null);
       throw Error(
         diagnostic?.error
-          ? `${stageLabels[diagnostic.stage ?? "configuration"]}: ${diagnostic.error}. ${categoryMessages[diagnostic.error]}`
+          ? `${stageLabels[diagnostic.stage ?? "configuration"]}: ${diagnostic.error}${diagnostic.reason ? " / " + diagnostic.reason : ""}. ${diagnostic.reason ? candleReasonLabels[diagnostic.reason] : categoryMessages[diagnostic.error]}`
           : data.error === "CSRF_REJECTED"
             ? "Sesi berubah. Muat ulang halaman sebelum melanjutkan."
             : data.error === "CONNECTION_TEST_FAILED"
@@ -214,6 +215,14 @@ export function AccountManagement() {
             <p>
               {report.error} · {stageLabels[report.stage ?? "configuration"]}
             </p>
+          )}
+          {report.reason && (
+            <p>
+              {report.reason} · {candleReasonLabels[report.reason]}
+            </p>
+          )}
+          {report.candleCount !== undefined && (
+            <p>Jumlah candle: {report.candleCount}</p>
           )}
           <p>
             Kegagalan candle tidak membatalkan hasil autentikasi yang sudah

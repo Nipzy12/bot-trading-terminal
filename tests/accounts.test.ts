@@ -379,6 +379,8 @@ describe("credential vault and private API", () => {
           success: false,
           stage: "candles",
           error: "EXNESS_INVALID_RESPONSE",
+          reason: "EMPTY_CANDLES",
+          candleCount: 0,
           stages: connectionStages.map((stage) => ({
             stage,
             status:
@@ -396,6 +398,8 @@ describe("credential vault and private API", () => {
     expect(r.status).toBe(502);
     expect(r.body).toMatchObject({
       error: "EXNESS_INVALID_RESPONSE",
+      reason: "EMPTY_CANDLES",
+      candleCount: 0,
       stage: "candles",
       live: false,
     });

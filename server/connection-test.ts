@@ -1,3 +1,4 @@
+import { CandleHistoryError, type CandleReason } from "./candle-history.js";
 import { ProviderError } from "./provider-error.js";
 export const connectionStages = [
   "discovery",
@@ -32,10 +33,14 @@ export type ConnectionReport = {
   stages: StageResult[];
   stage?: ConnectionStage | "configuration";
   error?: SafeCategory;
+  reason?: CandleReason;
+  candleCount?: number;
   retryAfter?: number;
 };
 export function safeFailure(error: unknown): {
   code: SafeCategory;
+  reason?: CandleReason;
+  candleCount?: number;
   retryAfter?: number;
 } {
   const candidate = error instanceof ProviderError ? error.code : "";
@@ -47,6 +52,9 @@ export function safeFailure(error: unknown): {
         : "EXNESS_UPSTREAM";
   return {
     code,
+    ...(error instanceof CandleHistoryError
+      ? { reason: error.reason, candleCount: error.candleCount }
+      : {}),
     ...(error instanceof ProviderError && error.retryAfter
       ? {
           retryAfter: Math.max(1, Math.min(86400, Math.ceil(error.retryAfter))),

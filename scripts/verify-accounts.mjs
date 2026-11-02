@@ -81,7 +81,14 @@ try {
           status: failed ? "error" : "verified",
           success: !failed,
           live: false,
-          ...(failed ? { stage: "candles", error: "EXNESS_MARKET_DATA" } : {}),
+          ...(failed
+            ? {
+                stage: "candles",
+                error: "EXNESS_INVALID_RESPONSE",
+                reason: "EMPTY_CANDLES",
+                candleCount: 0,
+              }
+            : {}),
           stages: ["discovery", "account_details", "limits", "candles"].map(
             (stage) => ({
               stage,
@@ -145,10 +152,11 @@ try {
     name: "Hasil tahap Test Connection",
   });
   await diagnostic
-    .getByText("EXNESS_MARKET_DATA · XAUUSD · H1 candle history", {
+    .getByText("EXNESS_INVALID_RESPONSE · XAUUSD · H1 candle history", {
       exact: true,
     })
     .waitFor();
+  await diagnostic.getByText("Jumlah candle: 0", { exact: true }).waitFor();
   assert.match(await diagnostic.locator("li").nth(1).innerText(), /Lulus/);
   assert.match(await diagnostic.locator("li").nth(3).innerText(), /Gagal/);
   await page.setViewportSize({ width: 390, height: 844 });

@@ -82,6 +82,17 @@ function fixture(
       expect(u.origin).toBe("https://ap.exness.test");
       if (u.pathname.endsWith("/limits"))
         return Response.json(limits(options.limit, options.quota));
+      if (u.pathname.endsWith("/instruments"))
+        return Response.json({
+          instruments: [
+            "XAUUSD",
+            "EURUSD",
+            "GBPUSD",
+            "USDJPY",
+            "BTCUSD",
+            "ETHUSD",
+          ],
+        });
       if (options.failure) return options.failure.clone();
       const start = Date.parse(u.searchParams.get("from")!);
       const interval = Number(
@@ -174,11 +185,11 @@ describe("Exness read-only adapter contract", () => {
       const rows = await reader.candles("XAUUSD", Number(interval));
       expect(rows).toHaveLength(3);
       expect(rows[1].time - rows[0].time).toBe(Number(interval));
-      expect(transport).toHaveBeenCalledTimes(3);
+      expect(transport).toHaveBeenCalledTimes(4);
       expect(String(transport.mock.calls[0][0])).toContain(
         "/v1/trading/access-point?account_id=" + config.accountId,
       );
-      const query = new URL(String(transport.mock.calls[2][0])).searchParams;
+      const query = new URL(String(transport.mock.calls[3][0])).searchParams;
       expect(query.get("timeframe")).toBe(timeframe);
       expect(query.get("price_type")).toBe("bid");
       expect(query.get("to")).toBeNull();
@@ -193,10 +204,10 @@ describe("Exness read-only adapter contract", () => {
       reader.candles("XAUUSD", 300),
     ]);
     await reader.candles("XAUUSD", 300);
-    expect(transport).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledTimes(4);
     clock += 6000;
     await reader.candles("XAUUSD", 300);
-    expect(transport).toHaveBeenCalledTimes(4);
+    expect(transport).toHaveBeenCalledTimes(5);
   });
   it("rejects discovery mismatch, invalid payloads, unordered OHLC and empty data", async () => {
     for (const discovery of [
@@ -249,11 +260,11 @@ describe("Exness read-only adapter contract", () => {
       retryAfter: 30,
       status: 429,
     });
-    expect(transport).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledTimes(4);
     await expect(reader.candles("XAUUSD", 300)).rejects.toMatchObject({
       status: 429,
     });
-    expect(transport).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledTimes(4);
   });
   it("honors endpoint quota before another upstream call", async () => {
     const transport = fixture({ quota: 1 });
@@ -262,7 +273,7 @@ describe("Exness read-only adapter contract", () => {
     await expect(reader.candles("EURUSD", 300)).rejects.toMatchObject({
       status: 429,
     });
-    expect(transport).toHaveBeenCalledTimes(3);
+    expect(transport).toHaveBeenCalledTimes(4);
   });
   it.each([401, 403, 500, 503])(
     "sanitizes upstream HTTP %s without retries",
@@ -282,7 +293,7 @@ describe("Exness read-only adapter contract", () => {
             ? "EXNESS_PERMISSION"
             : "EXNESS_UPSTREAM",
       );
-      expect(transport).toHaveBeenCalledTimes(3);
+      expect(transport).toHaveBeenCalledTimes(4);
     },
   );
   it("handles timeout/network exceptions with sanitized errors", async () => {
@@ -349,7 +360,7 @@ describe("Exness read-only adapter contract", () => {
         if (String(url).endsWith("/limits")) {
           const data = await response.json();
           data.limits.rest.methods[0].limits.history_range_days = 1;
-          data.limits.rest.global_account_rate.limit = 3;
+          data.limits.rest.global_account_rate.limit = 4;
           return Response.json(data);
         }
         return response;

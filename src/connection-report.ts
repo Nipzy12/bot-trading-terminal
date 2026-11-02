@@ -1,3 +1,16 @@
+export const candleReasonLabels = {
+  EMPTY_CANDLES: "Respons candle kosong.",
+  INVALID_SCHEMA: "Struktur candle tidak sesuai kontrak.",
+  INVALID_OHLC: "Nilai OHLC tidak valid atau tidak konsisten.",
+  INVALID_TIMESTAMP: "Timestamp candle tidak valid.",
+  OUT_OF_RANGE:
+    "Candle berada di luar rentang, belum tertutup, atau melebihi batas jumlah.",
+  INVALID_ORDER: "Timestamp candle duplikat atau tidak berurutan.",
+  INSTRUMENT_NOT_FOUND:
+    "Simbol yang sesuai tidak ditemukan pada daftar instrumen akun.",
+  AMBIGUOUS_INSTRUMENT:
+    "Lebih dari satu varian cocok; pemetaan otomatis dihentikan agar tidak salah memilih.",
+} as const;
 export const stageLabels = {
   configuration: "Persiapan koneksi",
   discovery: "Gateway discovery",
@@ -29,6 +42,8 @@ export const categoryMessages = {
   CONNECTION_DELETED: "Koneksi sudah dihapus.",
 } as const;
 export type ClientReport = {
+  reason?: keyof typeof candleReasonLabels;
+  candleCount?: number;
   stage?: keyof typeof stageLabels;
   error?: keyof typeof categoryMessages;
   stages: {
@@ -41,6 +56,17 @@ export function parseReport(value: unknown): ClientReport | null {
   const v = value as Record<string, unknown>;
   if (!Array.isArray(v.stages)) return null;
   return {
+    reason:
+      typeof v.reason === "string" &&
+      Object.hasOwn(candleReasonLabels, v.reason)
+        ? (v.reason as ClientReport["reason"])
+        : undefined,
+    candleCount:
+      Number.isSafeInteger(v.candleCount) &&
+      Number(v.candleCount) >= 0 &&
+      Number(v.candleCount) <= 1000000
+        ? Number(v.candleCount)
+        : undefined,
     stage:
       typeof v.stage === "string" && Object.hasOwn(stageLabels, v.stage)
         ? (v.stage as ClientReport["stage"])

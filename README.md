@@ -97,3 +97,24 @@ Test manual memakai probe baru agar cache chart tidak menyembunyikan kegagalan. 
 | ACCOUNT_SERVICE_UNAVAILABLE | Gangguan layanan database/accounting, bukan kegagalan autentikasi Exness |
 
 Setiap tahap dibatasi 4,5 detik dan total test 20 detik, di bawah function 30 detik; DNS lookup juga memiliki deadline dan hasil DNS dipin ke TLS lookup. Transport dihentikan setelah respons atau abort. Timestamp/signature dibuat setelah quota guard selesai agar waktu request tetap segar. Tidak ada redirect, perluasan allowlist otomatis, peningkatan izin atau broker mutation. Kegagalan tahap candle mempertahankan hasil lulus discovery/account details/limits; lihat tahap dan kategori sebelum mengubah konfigurasi. Tidak ada test dengan kredensial Exness nyata selama pengembangan.
+
+### Candle history dan simbol akun
+
+Tahap candle kini terlebih dahulu menjalankan signed GET `/v1/configuration/accounts/{account_id}/instruments` (`getAvailableInstrumentList`), mengikuti [daftar instrumen resmi](https://www.exness-api.com/reference/trading/get-available-instrument-list). Respons harus berisi `instruments: string[]`, dengan nama sesuai schema OpenAPI (1–11 karakter ASCII alfanumerik/titik/underscore/hyphen). Daftar terverifikasi disimpan hanya pada reader backend akun tersebut selama 5 menit; probe manual selalu membaca daftar baru.
+
+Pemetaan UI `XAUUSD` mengutamakan nama persis jika tersedia. Jika tidak, hanya satu varian berawalan `XAUUSD` dengan suffix lowercase/digit/titik/underscore/hyphen yang benar-benar ada dalam daftar akun yang dapat dipilih. Ini mencakup `XAUUSDm`, `XAUUSDc`, `XAUUSDz` atau varian terdaftar seperti `XAUUSD.pro`. Tidak ada request percobaan ke suffix yang ditebak. Jika beberapa varian tersedia tanpa nama persis, hentikan sebagai `AMBIGUOUS_INSTRUMENT`; jika tidak ada, `INSTRUMENT_NOT_FOUND`. Nama yang berbeda secara semantik seperti `GOLD` atau `XAUUSDT` tidak dianggap setara hanya dari nama, karena endpoint daftar tidak menyediakan metadata pasangan mata uang. Instrumen UI lain tetap memerlukan nama persis. Nama aktual/daftar akun tidak dimasukkan ke diagnostik frontend atau log.
+
+Query tetap `price_type=bid`, timeframe terdokumentasi, ISO UTC `from` inklusif dan `count` positif, tanpa menggabungkan `to`. Count dihitung setelah lookup instrumen dan tidak melebihi batas efektif provider atau target 180. `history_range_days` dan `history_age_days` tetap diperhitungkan. Cutoff validasi dibekukan saat query dibentuk: candle harus mulai pada/ setelah `from` dan sudah tertutup pada cutoff tersebut. Candle yang masih berjalan, terlalu tua, terlalu banyak, atau di luar rentang ditolak; tidak disaring diam-diam agar test sukses. Gap sesi pasar dan hasil valid yang lebih sedikit dari count tidak dianggap kesalahan; timestamp tetap harus unik dan menaik.
+
+`EXNESS_INVALID_RESPONSE` pada candle sekarang menyertakan `reason` aman dan `candleCount` (jumlah bar yang diterima bila array tersedia, bukan jumlah bar yang diterima sebagai valid):
+
+| Reason | Kondisi |
+| --- | --- |
+| EMPTY_CANDLES | Array candle valid secara struktur tetapi kosong; count 0 |
+| INVALID_SCHEMA | Wrapper/field/tipe tidak sesuai schema, termasuk numeric string dan JSON tidak dapat dibaca |
+| INVALID_OHLC | Harga non-finite/non-positif atau relasi high/low/open/close tidak konsisten |
+| INVALID_TIMESTAMP | Bukan ISO dengan offset, waktu tidak valid atau bukan Unix detik yang valid |
+| OUT_OF_RANGE | Melebihi count/batas, di luar from, atau candle belum tertutup saat request |
+| INVALID_ORDER | Timestamp duplikat atau tidak naik |
+
+Masalah pemetaan memakai kategori `EXNESS_MARKET_DATA` dengan reason `INSTRUMENT_NOT_FOUND` atau `AMBIGUOUS_INSTRUMENT`, count 0. Schema daftar instrumen yang rusak memakai `INVALID_SCHEMA`. Test yang lulus menyertakan hanya jumlah candle; tidak mengembalikan harga, actual symbol, account ID, host, body provider atau signing material. Tiga tahap yang sudah lulus tetap tercatat lulus. Diagnostik tidak melonggarkan validasi dan tidak meminta peningkatan izin.

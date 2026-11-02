@@ -7,6 +7,13 @@ import {
 } from "node:crypto";
 import { z } from "zod";
 import { candleSchema } from "./validation.js";
+import {
+  normalizeHistory,
+  instrumentNames,
+  selectInstrument,
+  CandleHistoryError,
+} from "./candle-history.js";
+export { normalizeHistory } from "./candle-history.js";
 export const timeframes: Record<number, string> = {
   300: "M5",
   900: "M15",
@@ -125,45 +132,6 @@ const limitsSchema = z.object({
 type Limits = z.infer<typeof limitsSchema>["limits"]["rest"];
 type Candle = z.infer<typeof candleSchema>;
 const iso = z.iso.datetime({ offset: true });
-const historySchema = z.object({
-  candles: z
-    .array(
-      z.object({
-        time: iso,
-        open: z.number().positive(),
-        high: z.number().positive(),
-        low: z.number().positive(),
-        close: z.number().positive(),
-        volume: z.number().nonnegative().optional(),
-      }),
-    )
-    .max(5000),
-});
-export function normalizeHistory(body: unknown, max: number) {
-  const result = historySchema.safeParse(body);
-  if (
-    !result.success ||
-    result.data.candles.length < 1 ||
-    result.data.candles.length > max
-  )
-    throw new ProviderError("EXNESS_INVALID_RESPONSE");
-  const rows = result.data.candles.map((c) => ({
-    time: Date.parse(c.time) / 1000,
-    open: c.open,
-    high: c.high,
-    low: c.low,
-    close: c.close,
-  }));
-  if (
-    rows.some(
-      (c, i) =>
-        !candleSchema.safeParse(c).success ||
-        (i > 0 && c.time <= rows[i - 1].time),
-    )
-  )
-    throw new ProviderError("EXNESS_INVALID_RESPONSE");
-  return rows;
-}
 // Warm-instance cache and quota accounting; no claim of cross-instance coordination.
 export class ExnessReader {
   private key: KeyObject;
@@ -176,6 +144,7 @@ export class ExnessReader {
   private usage: { at: number; operation: string }[] = [];
   private cache = new Map<string, { at: number; rows: Candle[] }>();
   private pending = new Map<string, Promise<Candle[]>>();
+  private instruments?: { at: number; names: string[] };
   constructor(
     private config: Config,
     private transport: typeof fetch = (...args) => fetch(...args),
@@ -318,6 +287,7 @@ export class ExnessReader {
         throw new ProviderError("EXNESS_MARKET_DATA");
       if (response.status === 404) {
         this.ap = undefined;
+        this.instruments = undefined;
         this.initializedAt = 0;
       }
       throw new ProviderError("EXNESS_UPSTREAM");
@@ -400,29 +370,54 @@ export class ExnessReader {
     if (count < 1) throw new ProviderError("EXNESS_LIMITS_UNAVAILABLE");
     return count;
   }
+  private async accountInstrument(symbol: string, signal: AbortSignal) {
+    if (!this.instruments || this.now() - this.instruments.at >= 300000) {
+      const names = instrumentNames(
+        await this.get(
+          this.ap!,
+          `/v1/configuration/accounts/${this.config.accountId}/instruments`,
+          signal,
+          "getAvailableInstrumentList",
+        ),
+      );
+      this.instruments = { at: this.now(), names };
+    }
+    return selectInstrument(symbol, this.instruments.names);
+  }
   private async history(symbol: string, interval: number, signal: AbortSignal) {
-    const count = this.candleCount(interval);
-    const end = Math.floor(this.now() / 1000 / interval) * interval;
-    const start = end - count * interval;
-    const query = new URLSearchParams({
-      instrument: symbol,
-      price_type: "bid",
-      timeframe: timeframes[interval],
-      from: new Date(start * 1000).toISOString(),
-      count: String(count),
-    });
-    const rows = normalizeHistory(
-      await this.get(
+    try {
+      const instrument = await this.accountInstrument(symbol, signal);
+      const count = this.candleCount(interval);
+      const requestedAt = this.now() / 1000;
+      const end = Math.floor(requestedAt / interval) * interval;
+      const start = end - count * interval;
+      const query = new URLSearchParams({
+        instrument,
+        price_type: "bid",
+        timeframe: timeframes[interval],
+        from: new Date(start * 1000).toISOString(),
+        count: String(count),
+      });
+      const body = await this.get(
         this.ap!,
         `/v1/market-data/accounts/${this.config.accountId}/candles?${query}`,
         signal,
         "getCandleHistory",
-      ),
-      count,
-    );
-    if (rows.some((c) => c.time < start || c.time >= end))
-      throw new ProviderError("EXNESS_INVALID_RESPONSE");
-    return rows;
+      );
+      return normalizeHistory(body, count, {
+        from: start,
+        now: requestedAt,
+        interval,
+      });
+    } catch (error) {
+      if (
+        error instanceof ProviderError &&
+        error.code === "EXNESS_INVALID_RESPONSE" &&
+        !(error instanceof CandleHistoryError)
+      )
+        throw new CandleHistoryError("INVALID_SCHEMA");
+      throw error;
+    }
   }
   async testConnection(): Promise<ConnectionReport> {
     // Fresh probe avoids cached successes and concurrent mutations of an active chart reader.
@@ -438,6 +433,7 @@ export class ExnessReader {
       status: "not_run",
     }));
     const total = AbortSignal.timeout(20000);
+    let candleCount: number | undefined;
     for (const result of stages) {
       const signal = AbortSignal.any([total, AbortSignal.timeout(4500)]);
       try {
@@ -462,7 +458,8 @@ export class ExnessReader {
           } else if (result.stage === "limits") {
             await probe.fetchLimits(signal);
             probe.candleCount(3600);
-          } else await probe.history("XAUUSD", 3600, signal);
+          } else
+            candleCount = (await probe.history("XAUUSD", 3600, signal)).length;
         }, signal);
         result.status = "passed";
       } catch (error) {
@@ -479,11 +476,14 @@ export class ExnessReader {
           stage: result.stage,
           error: failure.code,
           stages,
+          ...(failure.reason
+            ? { reason: failure.reason, candleCount: failure.candleCount }
+            : {}),
           ...(failure.retryAfter ? { retryAfter: failure.retryAfter } : {}),
         };
       }
     }
-    return { success: true, stages };
+    return { success: true, stages, candleCount };
   }
   async candles(symbol: string, interval: number): Promise<Candle[]> {
     if (
