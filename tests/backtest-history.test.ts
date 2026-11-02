@@ -21,6 +21,8 @@ function fixture(
     providerCode?: number;
     providerStatus?: number;
     boundaryAt?: number;
+    identicalBoundary?: boolean;
+    allBoundaries?: boolean;
   } = {},
 ) {
   const paths: string[] = [];
@@ -78,6 +80,20 @@ function fixture(
         });
       if (url.pathname.endsWith("instruments"))
         return Response.json({ instruments: ["XAUUSDm"] });
+      if (url.searchParams.get("count") === "1") {
+        expect(url.searchParams.get("to")).toBeNull();
+        return Response.json({
+          candles: [
+            {
+              time: url.searchParams.get("from"),
+              open: 3900,
+              high: 3901,
+              low: 3899,
+              close: 3900,
+            },
+          ],
+        });
+      }
       expect(url.searchParams.get("count")).toBeNull();
       expect(url.searchParams.get("instrument")).toBe("XAUUSDm");
       const from = Date.parse(url.searchParams.get("from")!) / 1000,
@@ -101,10 +117,13 @@ function fixture(
               low: 3899,
               close: 3900,
             }));
-      if (options.boundaryAt === candleRequests)
+      if (
+        options.boundaryAt === candleRequests ||
+        (options.allBoundaries && to < Math.floor(now / 1000 / 3600) * 3600)
+      )
         rows.push({
           time: new Date(to * 1000).toISOString(),
-          open: 3900,
+          open: options.identicalBoundary ? 3900 : 3900.5,
           high: 3901,
           low: 3899,
           close: 3900,
@@ -440,7 +459,7 @@ const run = (transport: typeof fetch, slots = 1440) =>
 describe("long-window pagination and safe diagnostics", () => {
   beforeEach(() => vi.spyOn(Date, "now").mockReturnValue(now));
   afterEach(() => vi.restoreAllMocks());
-  it.each([720, 1440, 2160])(
+  it.each([180, 360, 720, 1440, 2160])(
     "loads %i intervals through signed disjoint bounded windows",
     async (slots) => {
       const f = fixture({ max: 180, range: 10, age: null }),
@@ -461,6 +480,39 @@ describe("long-window pagination and safe diagnostics", () => {
       }
     },
   );
+  it.each([180, 360, 720, 1440, 2160])(
+    "proves and excludes historical duplicates for %i intervals",
+    async (slots) => {
+      const f = fixture({
+        max: 180,
+        range: 10,
+        age: null,
+        allBoundaries: true,
+        identicalBoundary: true,
+      });
+      const result = await run(bridge(f), slots);
+      expect(result.bars.length).toBe(slots);
+      expect(new Set(result.bars.map((b) => b.time)).size).toBe(slots);
+      expect(result.historicalBoundaryExcluded).toBe(slots / 180 - 1);
+    },
+  );
+  it("proves a historical boundary on a cold reader with a signed one-candle read", async () => {
+    const f = fixture({
+      max: 180,
+      range: 10,
+      age: null,
+      allBoundaries: true,
+      identicalBoundary: true,
+    });
+    const page = await f.reader.historyPage(
+      "XAUUSD",
+      3600,
+      Math.floor(now / 1000 / 3600) * 3600 - 180 * 3600,
+    );
+    expect(page.candles.length).toBe(180);
+    expect(page.boundaryDiagnostic).toBe("HISTORICAL_BOUNDARY_DUPLICATE");
+    expect(f.paths.some((p) => p.includes("count=1"))).toBe(true);
+  });
   it("caps the last request by remaining intervals and respects provider range separately from age", async () => {
     const f = fixture({ max: 128, range: 10, age: null });
     const result = await run(bridge(f), 1440);

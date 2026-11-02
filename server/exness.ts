@@ -142,6 +142,8 @@ export type HistoryPage = {
   window: { from: number; to: number };
   nextBefore: number | null;
   excludedBoundaryCandles: number;
+  historicalBoundaryExcluded?: number;
+  boundaryDiagnostic?: "HISTORICAL_BOUNDARY_DUPLICATE";
 };
 // Warm-instance cache and quota accounting; no claim of cross-instance coordination.
 export class ExnessReader {
@@ -607,9 +609,58 @@ export class ExnessReader {
         const emptyWindow = z
           .object({ candles: z.array(z.unknown()).length(0) })
           .safeParse(body).success;
+        const parsed = emptyWindow
+          ? []
+          : normalizeHistory(body, (to - from) / interval + 1);
+        let historicalReference: (typeof parsed)[number] | undefined;
+        if (parsed.at(-1)?.time === to && to + interval <= requestedAt) {
+          // Evidence is backend-verified and scoped to this reader/connection, never supplied by the browser.
+          const newer = [...this.pages.entries()].find(
+            ([k, v]) =>
+              k.startsWith(`${symbol}:${interval}:`) &&
+              this.now() - v.at < 120000 &&
+              v.page.window.from === to,
+          );
+          if (newer && newer[1].page.candles[0]?.time !== to)
+            throw new CandleHistoryError(
+              "OUT_OF_RANGE",
+              parsed.length,
+              "AT_TO",
+            );
+          historicalReference = newer?.[1].page.candles[0];
+          if (!historicalReference) {
+            const proofQuery = new URLSearchParams({
+              instrument,
+              price_type: "bid",
+              timeframe: timeframes[interval],
+              from: new Date(to * 1000).toISOString(),
+              count: "1",
+            });
+            const proof = await this.get(
+              this.ap!,
+              `/v1/market-data/accounts/${this.config.accountId}/candles?${proofQuery}`,
+              signal,
+              "getCandleHistory",
+            );
+            historicalReference = normalizeHistory(proof, 1, {
+              from: to,
+              to: to + interval,
+              interval,
+            })[0];
+          }
+        }
+        const historicalDiagnostics: {
+          excludedBoundaryCandles: number;
+          historicalBoundaryExcluded?: number;
+        } = diagnostics;
         const candles = emptyWindow
           ? []
-          : normalizeHistory(body, (to - from) / interval, window, diagnostics);
+          : normalizeHistory(
+              body,
+              (to - from) / interval,
+              { ...window, historicalReference },
+              historicalDiagnostics,
+            );
         const page = {
           emptyWindow,
           historyAgeKnown: age !== undefined,
@@ -624,7 +675,10 @@ export class ExnessReader {
           candles,
           window: { from, to },
           nextBefore: from > earliest ? from : null,
-          ...diagnostics,
+          ...historicalDiagnostics,
+          ...(historicalDiagnostics.historicalBoundaryExcluded
+            ? { boundaryDiagnostic: "HISTORICAL_BOUNDARY_DUPLICATE" as const }
+            : {}),
         };
         if (this.pages.size >= 24)
           this.pages.delete(this.pages.keys().next().value!);

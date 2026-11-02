@@ -9,6 +9,8 @@ import {
   type HistoryCategory,
 } from "./history-diagnostics";
 const packet = z.object({
+  historicalBoundaryExcluded: z.union([z.literal(0), z.literal(1)]).default(0),
+  boundaryDiagnostic: z.literal("HISTORICAL_BOUNDARY_DUPLICATE").optional(),
   emptyWindow: z.boolean().default(false),
   candles: z
     .array(
@@ -40,6 +42,7 @@ export type HistoryLoadResult = {
   source: PaperSource;
   excluded: number;
   emptyWindows: number;
+  historicalBoundaryExcluded: number;
   loadedIntervals: number;
   historyAgeKnown: boolean;
   truncated: boolean;
@@ -71,6 +74,7 @@ export async function loadHistory(
 ): Promise<HistoryLoadResult> {
   let covered = 0,
     excluded = 0,
+    historicalBoundaryExcluded = 0,
     emptyWindows = 0,
     oldestNewerTime: number | undefined,
     before: number | undefined,
@@ -236,6 +240,13 @@ export async function loadHistory(
     else emptyWindows++;
     pages.push(p.candles);
     covered += (to - from) / interval;
+    if (
+      p.historicalBoundaryExcluded &&
+      (p.boundaryDiagnostic !== "HISTORICAL_BOUNDARY_DUPLICATE" ||
+        p.excludedBoundaryCandles !== 1)
+    )
+      fail("INVALID_HISTORY_SCHEMA");
+    historicalBoundaryExcluded += p.historicalBoundaryExcluded;
     excluded += p.excludedBoundaryCandles;
     onProgress(covered);
     if (p.nextBefore === null) {
@@ -264,6 +275,7 @@ export async function loadHistory(
     source: source!,
     excluded,
     emptyWindows,
+    historicalBoundaryExcluded,
     loadedIntervals: covered,
     historyAgeKnown,
     truncated: diagnostic !== undefined,

@@ -166,6 +166,10 @@ export function Backtest() {
       report.warnings.push(
         `Diperoleh ${history.bars.length} candle untuk permintaan ${slots} interval; ${history.loadedIntervals} interval kalender berhasil dimuat.`,
       );
+    if (history.historicalBoundaryExcluded)
+      report.warnings.push(
+        `HISTORICAL_BOUNDARY_DUPLICATE · ${history.historicalBoundaryExcluded} candle duplikat historis identik dikecualikan secara eksplisit.`,
+      );
     if (history.emptyWindows)
       report.warnings.push(
         `${history.emptyWindows} jendela historis kosong dicatat sebagai gap; tidak ada candle buatan.`,

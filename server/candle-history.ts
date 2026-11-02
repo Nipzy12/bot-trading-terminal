@@ -64,6 +64,14 @@ export type HistoryWindow = {
   to: number;
   interval: number;
   requestedAt?: number;
+  historicalReference?: {
+    time: number;
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume?: number;
+  };
 };
 export function closedHistoryWindow(
   now: number,
@@ -96,7 +104,10 @@ export function normalizeHistory(
   body: unknown,
   max: number,
   window?: HistoryWindow,
-  diagnostics?: { excludedBoundaryCandles: number },
+  diagnostics?: {
+    excludedBoundaryCandles: number;
+    historicalBoundaryExcluded?: number;
+  },
 ) {
   if (
     !body ||
@@ -151,7 +162,14 @@ export function normalizeHistory(
     if (previous && time <= previous)
       throw new CandleHistoryError("INVALID_ORDER", count);
     previous = time;
-    return { time, open, high, low, close };
+    return {
+      time,
+      open,
+      high,
+      low,
+      close,
+      ...(row.volume === undefined ? {} : { volume: row.volume as number }),
+    };
   });
   // Validate every row before considering the single explicitly reported provider-boundary exception.
   if (window && parsed.some((candle) => candle.time > window.to))
@@ -163,13 +181,21 @@ export function normalizeHistory(
     if (time < window.from)
       throw new CandleHistoryError("OUT_OF_RANGE", count, "BEFORE_FROM");
     if (time === window.to) {
-      if (
-        index !== parsed.length - 1 ||
-        window.requestedAt === undefined ||
-        window.requestedAt < time ||
-        window.requestedAt >= time + window.interval
-      )
+      const running =
+        window.requestedAt !== undefined &&
+        window.requestedAt >= time &&
+        window.requestedAt < time + window.interval;
+      const ref = window.historicalReference;
+      const identical =
+        ref !== undefined &&
+        ["time", "open", "high", "low", "close", "volume"].every(
+          (key) =>
+            candle[key as keyof typeof candle] === ref[key as keyof typeof ref],
+        );
+      if (index !== parsed.length - 1 || (!running && !identical))
         throw new CandleHistoryError("OUT_OF_RANGE", count, "AT_TO");
+      if (!running && identical && diagnostics)
+        diagnostics.historicalBoundaryExcluded = 1;
       excludedBoundaryCandles = 1;
     } else if (time + window.interval > window.to)
       throw new CandleHistoryError("OUT_OF_RANGE", count, "UNFINISHED_CANDLE");
