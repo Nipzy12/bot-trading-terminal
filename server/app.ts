@@ -1,3 +1,4 @@
+import { historyQuery, demoHistory } from "./backtest-history.js";
 import express from "express";
 import { toNodeHandler } from "better-auth/node";
 import { auth, configured, origin, cookieOnlyResponse } from "./auth.js";
@@ -92,6 +93,24 @@ app.get("/api/market", async (req, res) => {
     res.status(502).json({
       error: "Market provider unavailable. Check backend configuration.",
     });
+  }
+});
+app.get("/api/backtest/history", (req, res) => {
+  const parsed = historyQuery.safeParse(req.query);
+  if (!parsed.success) {
+    res.status(400).json({ error: "INVALID_HISTORY_QUERY" });
+    return;
+  }
+  try {
+    res.json(
+      demoHistory(
+        parsed.data.symbol,
+        Number(parsed.data.interval),
+        parsed.data.before,
+      ),
+    );
+  } catch {
+    res.status(400).json({ error: "INVALID_HISTORY_WINDOW" });
   }
 });
 // No broker order routes exist. Execution is exclusively browser-local paper trading.

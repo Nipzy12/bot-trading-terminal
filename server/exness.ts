@@ -6,6 +6,7 @@ import {
   type KeyObject,
 } from "node:crypto";
 import { z } from "zod";
+import { limitedJson } from "./http-json.js";
 import { candleSchema } from "./validation.js";
 import {
   normalizeHistory,
@@ -133,6 +134,13 @@ const limitsSchema = z.object({
 type Limits = z.infer<typeof limitsSchema>["limits"]["rest"];
 type Candle = z.infer<typeof candleSchema>;
 const iso = z.iso.datetime({ offset: true });
+export type HistoryPage = {
+  emptyWindow: boolean;
+  candles: Candle[];
+  window: { from: number; to: number };
+  nextBefore: number | null;
+  excludedBoundaryCandles: number;
+};
 // Warm-instance cache and quota accounting; no claim of cross-instance coordination.
 export class ExnessReader {
   private key: KeyObject;
@@ -145,6 +153,8 @@ export class ExnessReader {
   private usage: { at: number; operation: string }[] = [];
   private cache = new Map<string, { at: number; rows: Candle[] }>();
   private pending = new Map<string, Promise<Candle[]>>();
+  private pages = new Map<string, { at: number; page: HistoryPage }>();
+  private pagePending = new Map<string, Promise<HistoryPage>>();
   private instruments?: { at: number; names: string[] };
   constructor(
     private config: Config,
@@ -241,8 +251,9 @@ export class ExnessReader {
     }
     let body: unknown;
     try {
-      body = await response.json();
-    } catch {
+      body = await bounded(() => limitedJson(response, signal), signal);
+    } catch (error) {
+      if (error instanceof ProviderError) throw error;
       if (signal.aborted) throw new ProviderError("TIMEOUT", 504);
       if (response.ok) throw new ProviderError("EXNESS_INVALID_RESPONSE");
     }
@@ -271,6 +282,7 @@ export class ExnessReader {
       this.cooldown = now + wait * 1000;
       this.initializedAt = 0;
       this.cache.clear();
+      this.pages.clear();
       throw new ProviderError("EXNESS_RATE_LIMIT", 429, wait);
     }
     if (!response.ok || publicError?.code !== undefined) {
@@ -478,6 +490,86 @@ export class ExnessReader {
       }
     }
     return { success: true, stages, candleCount, ...diagnostics };
+  }
+  async historyPage(
+    symbol: string,
+    interval: number,
+    before?: number,
+  ): Promise<HistoryPage> {
+    if (
+      !["XAUUSD", "EURUSD", "BTCUSD"].includes(symbol) ||
+      !timeframes[interval]
+    )
+      throw new ProviderError("EXNESS_REQUEST", 400);
+    const signal = AbortSignal.timeout(8000);
+    return bounded(async () => {
+      await this.initialize(signal);
+      const instrument = await this.accountInstrument(symbol, signal);
+      const base = this.historyWindow(interval);
+      const method = this.limits!.methods.find(
+        (m) => m.api_operation_id === "getCandleHistory",
+      );
+      const age = constraints.parse(method!.limits).history_age_days ?? 365;
+      const earliest =
+        Math.ceil((this.now() / 1000 - Math.min(age, 365) * 86400) / interval) *
+        interval;
+      const to = before ?? base.to;
+      if (
+        !Number.isSafeInteger(to) ||
+        to % interval ||
+        to > base.to ||
+        to <= earliest
+      )
+        throw new ProviderError("EXNESS_HISTORY_WINDOW", 400);
+      const from = Math.max(earliest, to - base.max * interval);
+      const window = { from, to, interval, requestedAt: base.requestedAt };
+      const key = `${symbol}:${interval}:${from}:${to}`;
+      const cached = this.pages.get(key);
+      if (cached && this.now() - cached.at < 120000) return cached.page;
+      const pending = this.pagePending.get(key);
+      if (pending) return pending;
+      const task = (async () => {
+        const query = new URLSearchParams({
+          instrument,
+          price_type: "bid",
+          timeframe: timeframes[interval],
+          from: new Date(from * 1000).toISOString(),
+          to: new Date(to * 1000).toISOString(),
+        });
+        const diagnostics = { excludedBoundaryCandles: 0 };
+        const body = await this.get(
+          this.ap!,
+          `/v1/market-data/accounts/${this.config.accountId}/candles?${query}`,
+          signal,
+          "getCandleHistory",
+        );
+        // An explicitly empty, valid history window is a session gap, not a candle to fabricate.
+        // Connection tests keep their stricter EMPTY_CANDLES failure behavior.
+        const emptyWindow = z
+          .object({ candles: z.array(z.unknown()).length(0) })
+          .safeParse(body).success;
+        const candles = emptyWindow
+          ? []
+          : normalizeHistory(body, (to - from) / interval, window, diagnostics);
+        const page = {
+          emptyWindow,
+          candles,
+          window: { from, to },
+          nextBefore: from > earliest ? from : null,
+          ...diagnostics,
+        };
+        if (this.pages.size >= 24)
+          this.pages.delete(this.pages.keys().next().value!);
+        this.pages.set(key, { at: this.now(), page });
+        return page;
+      })();
+      this.pagePending.set(key, task);
+      try {
+        return await task;
+      } finally {
+        this.pagePending.delete(key);
+      }
+    }, signal);
   }
   async candles(symbol: string, interval: number): Promise<Candle[]> {
     if (

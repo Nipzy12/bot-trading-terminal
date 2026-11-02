@@ -1,0 +1,188 @@
+.backtest-page {
+  max-width: 1500px;
+  margin: auto;
+  padding: 24px;
+  color: #dce6f5;
+}
+.bt-header {
+  height: auto;
+  padding: 16px 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+.bt-header nav {
+  display: flex;
+  gap: 18px;
+}
+.backtest-page a {
+  color: #8bbfff;
+}
+.bt-intro {
+  padding: 28px 0;
+}
+.bt-intro h1 {
+  font-size: 36px;
+  margin: 18px 0 10px;
+}
+.backtest-page p {
+  color: #9eacc1;
+  line-height: 1.6;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.bt-config,
+.bt-report {
+  padding: 22px;
+  margin-bottom: 24px;
+}
+.backtest-page h2 {
+  font-size: 18px;
+  margin: 0 0 18px;
+}
+.bt-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+.bt-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 12px;
+  color: #a4b3c7;
+}
+.bt-grid input,
+.bt-grid select {
+  width: 100%;
+  min-width: 0;
+  background: #111a28;
+  color: #e5edf7;
+  border: 1px solid #334259;
+  border-radius: 6px;
+  padding: 12px;
+}
+.bt-assumptions {
+  border-top: 1px solid #29364b;
+  margin-top: 22px;
+  padding-top: 18px;
+}
+.bt-assumptions h3 {
+  font-size: 14px;
+}
+.bt-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.bt-actions .submit-order {
+  max-width: 300px;
+  margin: 12px 0;
+}
+.bt-actions > button:not(.submit-order) {
+  color: #f0a9af;
+  background: #252030;
+  padding: 12px;
+  border-radius: 6px;
+}
+.bt-segments {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.bt-report {
+  min-width: 0;
+}
+.bt-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.bt-metrics small {
+  display: block;
+  color: #9eacc1;
+  font-size: 11px;
+}
+.bt-metrics strong {
+  display: block;
+  font-size: 17px;
+  margin-top: 8px;
+  overflow-wrap: anywhere;
+}
+.equity-chart {
+  margin: 24px 0;
+}
+.equity-chart svg {
+  width: 100%;
+  height: auto;
+}
+.equity-chart figcaption {
+  font-size: 11px;
+  color: #92a4bc;
+  line-height: 1.6;
+}
+.bt-warning {
+  padding: 14px;
+  background: #32291c;
+  border: 1px solid #675333;
+  border-radius: 6px;
+}
+.bt-result-heading {
+  padding: 8px 0;
+}
+.bt-trades {
+  max-height: 360px;
+  overflow: auto;
+}
+.bt-trades article {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid #29364b;
+  padding: 14px 0;
+  font-size: 12px;
+}
+.bt-report summary {
+  cursor: pointer;
+  padding: 12px 0;
+  font-size: 13px;
+}
+@media (max-width: 800px) {
+  .bt-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .bt-segments {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 440px) {
+  .backtest-page {
+    padding: 12px;
+  }
+  .bt-config,
+  .bt-report {
+    padding: 16px;
+  }
+  .bt-grid {
+    grid-template-columns: 1fr;
+  }
+  .bt-header nav {
+    font-size: 12px;
+  }
+  .bt-intro h1 {
+    font-size: 30px;
+  }
+}
+.backtest-page {
+  display: block;
+}
+.bt-header nav a {
+  display: flex !important;
+}
+.bt-header .logo {
+  flex-wrap: wrap;
+}
+.bt-report figure {
+  max-width: 100%;
+}

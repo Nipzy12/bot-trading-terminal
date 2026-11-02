@@ -1,3 +1,4 @@
+import { historyQuery } from "./backtest-history.js";
 import express, { type Request } from "express";
 import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { fromNodeHeaders } from "better-auth/node";
@@ -15,6 +16,11 @@ export type Identity = {
 };
 type Reader = {
   testConnection: () => Promise<ConnectionReport>;
+  historyPage?: (
+    symbol: string,
+    interval: number,
+    before?: number,
+  ) => Promise<unknown>;
   candles: (symbol: string, interval: number) => Promise<unknown>;
 };
 type Dependencies = {
@@ -324,8 +330,11 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
     );
     res.json({ deleted: true });
   });
-  router.get("/market", async (req, res) => {
-    const parsed = marketQuery.safeParse(req.query);
+  router.get(["/market", "/backtest/history"], async (req, res) => {
+    const isHistory = req.path === "/backtest/history";
+    const parsed = (isHistory ? historyQuery : marketQuery).safeParse(
+      req.query,
+    );
     if (!parsed.success) {
       res.status(400).json({ error: "INVALID_MARKET" });
       return;
@@ -344,9 +353,20 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
     const row = rows.rows[0];
     const config = decrypt(row.envelope, owner, row.id) as Config;
     safeOrigin(config.gateway);
-    const candles = await deps
-      .reader(config, owner, row.id)
-      .candles(parsed.data.symbol, Number(parsed.data.interval));
+    const reader = deps.reader(config, owner, row.id);
+    const page = isHistory
+      ? await reader.historyPage?.(
+          parsed.data.symbol,
+          Number(parsed.data.interval),
+          "before" in parsed.data && typeof parsed.data.before === "number"
+            ? parsed.data.before
+            : undefined,
+        )
+      : undefined;
+    if (isHistory && !page) throw new ProviderError("HISTORY_UNAVAILABLE");
+    const candles = isHistory
+      ? undefined
+      : await reader.candles(parsed.data.symbol, Number(parsed.data.interval));
     // Recheck ownership after network I/O so a concurrent disconnect revokes the response.
     const valid = await deps
       .db()
@@ -364,7 +384,7 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
       label: "EXNESS",
       kind: "candle-history",
       live: false,
-      candles,
+      ...(isHistory ? (page as object) : { candles }),
     });
   });
   router.use((_req, res) => res.status(404).json({ error: "NOT_FOUND" }));

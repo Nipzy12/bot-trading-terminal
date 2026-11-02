@@ -134,6 +134,7 @@ describe("credential vault and private API", () => {
       ["post", "/selection"],
       ["delete", "/connections/11111111-1111-4111-8111-111111111111"],
       ["get", "/market?symbol=XAUUSD"],
+      ["get", "/backtest/history?symbol=XAUUSD"],
     ] as const) {
       expect((await request(app())[method]("/api/account" + path)).status).toBe(
         401,
@@ -333,6 +334,71 @@ describe("credential vault and private API", () => {
     });
     expect(
       (await request(racing).get("/api/account/market?symbol=XAUUSD")).status,
+    ).toBe(409);
+  });
+  it("serves backtest pages only for the owner selected connection and revokes changed selection", async () => {
+    const id = (await connect()).body.id;
+    await request(app())
+      .post(`/api/account/connections/${id}/test`)
+      .set(headers());
+    await request(app())
+      .post("/api/account/selection")
+      .set(headers())
+      .send({ id });
+    const page = {
+      candles: [{ time: 1700000000, open: 1, high: 2, low: 0.5, close: 1 }],
+      window: { from: 1699999200, to: 1700002800 },
+      nextBefore: 1699999200,
+      excludedBoundaryCandles: 0,
+    };
+    const historyPage = vi.fn().mockResolvedValue(page);
+    const service = app({
+      reader: () => ({
+        testConnection: async () => ({ success: true, stages: [] }),
+        candles: async () => [],
+        historyPage,
+      }),
+    });
+    const result = await request(service).get(
+      "/api/account/backtest/history?symbol=XAUUSD&interval=3600&before=1700002800",
+    );
+    expect(result.status).toBe(200);
+    expect(historyPage).toHaveBeenCalledWith("XAUUSD", 3600, 1700002800);
+    expect(result.body).toMatchObject({
+      ...page,
+      source: "exness",
+      paperSource: { kind: "EXNESS", connectionId: id },
+      live: false,
+    });
+    for (const value of Object.values(secret))
+      expect(result.text).not.toContain(value);
+    principal = bob;
+    expect(
+      (
+        await request(service).get(
+          "/api/account/backtest/history?symbol=XAUUSD",
+        )
+      ).status,
+    ).toBe(409);
+    principal = alice;
+    const revoked = app({
+      reader: () => ({
+        testConnection: async () => ({ success: true, stages: [] }),
+        candles: async () => [],
+        historyPage: async () => {
+          await db.query("DELETE FROM nexus_selection WHERE user_id=$1", [
+            "alice",
+          ]);
+          return page;
+        },
+      }),
+    });
+    expect(
+      (
+        await request(revoked).get(
+          "/api/account/backtest/history?symbol=XAUUSD",
+        )
+      ).status,
     ).toBe(409);
   });
   it("enforces centralized atomic rate limits across independent application instances", async () => {

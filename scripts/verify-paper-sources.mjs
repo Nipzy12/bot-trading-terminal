@@ -37,7 +37,7 @@ try {
       localStorage.setItem("nexus.paper.v1", raw);
   }, JSON.stringify(legacy));
   let selected = 0;
-  await page.route("**/api/account/market?**", async (route) => {
+  const privateFeed = async (route) => {
     const interval = Number(
       new URL(route.request().url()).searchParams.get("interval"),
     );
@@ -59,7 +59,8 @@ try {
         })),
       },
     });
-  });
+  };
+  await page.route("**/api/account/market?**", privateFeed);
   const book = () =>
     page.evaluate(() => JSON.parse(localStorage.getItem("nexus.paper.v2")));
   const ready = () =>
@@ -163,6 +164,41 @@ try {
     path: "/workspace/paper-accounts-desktop.png",
     fullPage: true,
   });
+  const pendingPage = await browser.newPage({
+    viewport: { width: 360, height: 844 },
+  });
+  pendingPage.on("pageerror", (e) => errors.push(e.message));
+  await pendingPage.addInitScript(
+    (raw) => localStorage.setItem("nexus.paper.v1", raw),
+    JSON.stringify(legacy),
+  );
+  await pendingPage.route("**/api/account/market?**", privateFeed);
+  await pendingPage.goto(base + "/?feed=exness");
+  await pendingPage.waitForFunction(
+    () => document.querySelector(".submit-order")?.disabled === false,
+  );
+  await pendingPage.getByLabel("Akun paper terpisah").selectOption("DEMO");
+  await pendingPage
+    .getByRole("button", { name: "Emergency stop · tutup semua", exact: true })
+    .click();
+  await pendingPage.waitForFunction(
+    () =>
+      JSON.parse(localStorage.getItem("nexus.paper.v2")).accounts[0]
+        .emergency === true,
+  );
+  const queued = await pendingPage.evaluate(
+    () => JSON.parse(localStorage.getItem("nexus.paper.v2")).accounts[0],
+  );
+  assert.equal(queued.positions.length, 3);
+  assert.equal(queued.history.length, 0);
+  assert.match(await pendingPage.locator(".pnl-strip").innerText(), /Menunggu/);
+  assert.equal(
+    await pendingPage
+      .getByRole("button", { name: "Jalankan robot simulasi", exact: true })
+      .isDisabled(),
+    true,
+  );
+  await pendingPage.close();
   assert.deepEqual(errors, []);
   console.log(
     "PASS: legacy DEMO positions preserved; Exness connection A/B entries, marks, pending mismatch, emergency/history isolation, reload and mobile UI; legacy backup unchanged.",
