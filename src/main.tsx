@@ -631,8 +631,13 @@ function App() {
                 phase={liveDiagnostic.phase} · upstreamOpened=
                 {String(liveDiagnostic.upstreamOpened)} · subscriptionSent=
                 {String(liveDiagnostic.subscriptionSent)} ·
+                subscriptionAckReceived=
+                {String(liveDiagnostic.subscriptionAckReceived)} ·
                 firstValidTickReceived=
                 {String(liveDiagnostic.firstValidTickReceived)}
+                {liveDiagnostic.brokerErrorCode !== undefined && (
+                  <> · brokerErrorCode={liveDiagnostic.brokerErrorCode}</>
+                )}
                 {liveDiagnostic.closeCode !== undefined && (
                   <> · closeCode={liveDiagnostic.closeCode}</>
                 )}

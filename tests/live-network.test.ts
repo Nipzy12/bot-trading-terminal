@@ -37,6 +37,7 @@ it("filters diagnostics and observability using enums only", async () => {
       phase: "OPEN",
       upstreamOpened: true,
       subscriptionSent: false,
+      subscriptionAckReceived: false,
       firstValidTickReceived: false,
       closeCode: 4999,
       internalCode: "PRIVATE_ACCOUNT",
@@ -48,6 +49,7 @@ it("filters diagnostics and observability using enums only", async () => {
       phase: "OPEN",
       upstreamOpened: true,
       subscriptionSent: false,
+      subscriptionAckReceived: false,
       firstValidTickReceived: false,
     });
     observeLive("PRIVATE_HOST", raw);
@@ -57,6 +59,7 @@ it("filters diagnostics and observability using enums only", async () => {
       phase: "OPEN",
       upstreamOpened: true,
       subscriptionSent: false,
+      subscriptionAckReceived: false,
       firstValidTickReceived: false,
     });
     expect(liveDiagnostic({ ...raw, phase: "PRIVATE_HOST" })).toBeUndefined();

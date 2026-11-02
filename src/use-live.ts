@@ -1,4 +1,5 @@
 import {
+  brokerStatuses,
   liveDiagnostic,
   type LiveDiagnostic,
   networkStages,
@@ -181,6 +182,7 @@ export function useLive(
               "EXNESS_UNAVAILABLE",
               "AUTH_REVOKED",
               ...preflightCodes,
+              ...brokerStatuses,
               ...networkStages.filter((code) => code !== "EXNESS_LIVE"),
             ].includes(reason)
               ? reason

@@ -28,7 +28,7 @@ import {
 } from "./exness.js";
 import { safeOrigin, resolveHost } from "./ssrf.js";
 import { bounded } from "./connection-test.js";
-import { normalizeBrokerTick } from "../src/live.js";
+import { parseLiveFrame } from "./live-frame.js";
 const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 });
 export function attachLive(server: http.Server) {
   server.on("upgrade", async (req, socket, head) => {
@@ -40,12 +40,16 @@ export function attachLive(server: http.Server) {
     let phase: NetworkPhase = "DNS";
     let upstreamOpened = false,
       subscriptionSent = false,
+      // No standalone successful-ACK schema is defined by the official docs.
+      subscriptionAckReceived = false,
+      ackCandidateReceived = false,
       firstValidTickReceived = false;
     let closeCode: number | undefined, handshakeIssue: string | undefined;
     const state = () => ({
       phase,
       upstreamOpened,
       subscriptionSent,
+      subscriptionAckReceived,
       firstValidTickReceived,
       ...(closeCode !== undefined ? { closeCode } : {}),
       ...diagnostic,
@@ -169,8 +173,9 @@ export function attachLive(server: http.Server) {
           throw new ProviderError("RATE_LIMITED", 429, undefined, {
             rateLimitSource: "INTERNAL_WS_LEASE",
           });
+      const subscriptionId = randomUUID();
       const subscription = JSON.stringify({
-        id: randomUUID(),
+        id: subscriptionId,
         subscribe: { event: "ticks", instruments: [prepared.instrument] },
       });
       if (Buffer.byteLength(subscription) > prepared.maxMessageBytes)
@@ -269,10 +274,13 @@ export function attachLive(server: http.Server) {
           }
           subscriptionSent = true;
           // A late write callback must not replace a valid tick with WAITING.
-          if (!firstValidTickReceived) {
+          if (!firstValidTickReceived && !ackCandidateReceived) {
             status("SUBSCRIPTION_SENT");
             status("WAITING_FOR_BROKER_TICK");
-          } else send({ type: "diagnostic", ...state() });
+          } else {
+            observeLive("SUBSCRIPTION_SENT", state());
+            send({ type: "diagnostic", ...state() });
+          }
         };
         try {
           upstream?.send(subscription, sent);
@@ -283,35 +291,44 @@ export function attachLive(server: http.Server) {
       upstream.on("message", (bytes) => {
         if (closed || !upstreamOpened) return;
         try {
-          const raw = JSON.parse(bytes.toString());
-          if (raw.error || raw.code) {
+          const frame = parseLiveFrame(JSON.parse(bytes.toString()), {
+            subscriptionId,
+            accountId: config.accountId,
+            instrument: prepared.instrument,
+            connectionId: row.id,
+            symbol,
+            last,
+          });
+          if (frame.kind === "unverified_ack" && !ackCandidateReceived) {
+            ackCandidateReceived = true;
+            // Docs do not establish code=200 as ACK success. Keep waiting for an
+            // independently validated tick; no ACK, quota or feed-verification bypass.
+            diagnostic = { internalCode: "ACK_CONTRACT_UNVERIFIED" };
+            status("UNKNOWN_BROKER_RESPONSE");
+            return;
+          }
+          if (frame.kind === "subscription_error") {
+            diagnostic = { brokerErrorCode: frame.brokerErrorCode };
             stop(
-              Number(raw.code ?? raw.error?.code) === 3015 ||
-                Number(raw.code ?? raw.error?.code) === 1
-                ? "RATE_LIMITED"
-                : "EXNESS_PERMISSION_OR_UNAVAILABLE",
-              Number(raw.code ?? raw.error?.code) === 3015 ||
-                Number(raw.code ?? raw.error?.code) === 1
+              frame.code,
+              frame.code === "RATE_LIMITED"
                 ? { rateLimitSource: "EXNESS_WS" }
                 : {},
             );
             return;
           }
-          if (
-            raw.account_id !== undefined &&
-            String(raw.account_id) !== config.accountId
-          ) {
+          if (frame.kind === "account_mismatch") {
+            diagnostic = {};
             stop("INVALID_RESPONSE");
             return;
           }
-          const t = normalizeBrokerTick(
-            raw,
-            prepared.instrument,
-            row.id,
-            symbol,
-            last,
-          );
-          if (!t) return;
+          if (frame.kind === "invalid_tick") return;
+          if (frame.kind !== "tick") {
+            diagnostic = {};
+            stop("UNKNOWN_BROKER_RESPONSE");
+            return;
+          }
+          const t = frame.tick;
           last = t.time;
           if ((client?.bufferedAmount ?? 0) > 65536) {
             stop("SLOW_CLIENT");
@@ -319,12 +336,14 @@ export function attachLive(server: http.Server) {
           }
           if (!firstValidTickReceived) {
             firstValidTickReceived = true;
+            diagnostic = {};
             observeLive("EXNESS_LIVE", state());
             send({ type: "diagnostic", ...state() });
           }
           send({ type: "tick", ...t });
         } catch {
-          stop("INVALID_RESPONSE");
+          diagnostic = {};
+          stop("UNKNOWN_BROKER_RESPONSE");
         }
       });
       upstream.on("unexpected-response", (_r, response) => {

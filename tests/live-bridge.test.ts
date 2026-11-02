@@ -20,6 +20,7 @@ vi.mock("ws", async () => {
     send = vi.fn((_data: string, callback?: (error?: Error) => void) => {
       if (state.sendFailure === "throw")
         throw new Error("private subscription context");
+      if (state.sendFailure === "pending") return;
       callback?.(
         state.sendFailure === "callback"
           ? new Error("private subscription context")
@@ -787,3 +788,154 @@ it.each([undefined, "not-the-documented-protocol"])(
     }
   },
 );
+
+it("keeps an exact correlated ACK candidate open, awaiting an independent valid tick", async () => {
+  const { frames } = await observed(),
+    up = state.upstreams[0];
+  up.emit("open");
+  const { id } = JSON.parse(up.send.mock.calls[0][0]);
+  up.emit("message", Buffer.from(JSON.stringify({ id, code: 200 })));
+  await vi.waitFor(() =>
+    expect(frames).toContainEqual(
+      expect.objectContaining({
+        code: "UNKNOWN_BROKER_RESPONSE",
+        internalCode: "ACK_CONTRACT_UNVERIFIED",
+        subscriptionAckReceived: false,
+        firstValidTickReceived: false,
+      }),
+    ),
+  );
+  expect(state.leased).toBe(true);
+  expect(
+    frames.some((f) => f.type === "tick" || f.code === "EXNESS_LIVE"),
+  ).toBe(false);
+  up.emit(
+    "message",
+    Buffer.from(
+      JSON.stringify({
+        instrument: "XAUUSDm",
+        bid: 3900,
+        ask: 3901,
+        timestamp: new Date().toISOString(),
+      }),
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(frames.filter((f) => f.type === "tick")).toHaveLength(1),
+  );
+  expect(frames.filter((f) => f.type === "diagnostic").at(-1)).toMatchObject({
+    subscriptionAckReceived: false,
+    firstValidTickReceived: true,
+  });
+  const safe =
+    JSON.stringify(frames) + JSON.stringify(vi.mocked(console.info).mock.calls);
+  expect(safe).not.toContain(id);
+  expect(safe).not.toContain('"brokerErrorCode":200');
+});
+it.each([
+  [1002, "EXNESS_PERMISSION"],
+  [3000, "EXNESS_SUBSCRIPTION_INVALID"],
+  [3015, "RATE_LIMITED"],
+] as const)(
+  "handles correlated subscription error %s without raw broker text or request id",
+  async (code, category) => {
+    const { frames } = await observed(),
+      up = state.upstreams[0];
+    up.emit("open");
+    const { id } = JSON.parse(up.send.mock.calls[0][0]);
+    up.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          id,
+          code,
+          error_message: "DO_NOT_DISPLAY_HOST_ACCOUNT_SIGNATURE",
+        }),
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(frames).toContainEqual(
+        expect.objectContaining({
+          code: category,
+          brokerErrorCode: code,
+          subscriptionAckReceived: false,
+          firstValidTickReceived: false,
+        }),
+      ),
+    );
+    if (code === 3015) {
+      expect(frames.at(-1).rateLimitSource).toBe("EXNESS_WS");
+      expect(frames.at(-1).retryAfterSec).toBeUndefined();
+    }
+    expect(state.upstreams).toHaveLength(1);
+    expect(state.leased).toBe(false);
+    const safe =
+      JSON.stringify(frames) +
+      JSON.stringify(vi.mocked(console.info).mock.calls);
+    expect(safe).not.toContain(id);
+    expect(safe).not.toContain("DO_NOT_DISPLAY");
+  },
+);
+it.each(["mismatched_ack", "unknown_error", "invalid_ack", "malformed_json"])(
+  "reports %s safely instead of permission denied",
+  async (kind) => {
+    const { frames } = await observed(),
+      up = state.upstreams[0];
+    up.emit("open");
+    const { id } = JSON.parse(up.send.mock.calls[0][0]);
+    const raw =
+      kind === "mismatched_ack"
+        ? { id: "foreign-private-request", code: 200 }
+        : kind === "unknown_error"
+          ? { id, code: 987654321, error_message: "PRIVATE" }
+          : { id, code: 200, error_message: "PRIVATE" };
+    up.emit(
+      "message",
+      Buffer.from(
+        kind === "malformed_json"
+          ? "PRIVATE INVALID JSON"
+          : JSON.stringify(raw),
+      ),
+    );
+    await vi.waitFor(() =>
+      expect(frames.at(-1)).toMatchObject({
+        code: "UNKNOWN_BROKER_RESPONSE",
+        subscriptionAckReceived: false,
+        firstValidTickReceived: false,
+      }),
+    );
+    expect(frames.at(-1).brokerErrorCode).toBeUndefined();
+    expect(state.leased).toBe(false);
+    expect(JSON.stringify(frames)).not.toMatch(
+      /PRIVATE|foreign-private-request|987654321|EXNESS_PERMISSION/,
+    );
+  },
+);
+
+it("does not replace an early ACK-candidate warning with a late subscription write callback", async () => {
+  state.sendFailure = "pending";
+  const { frames } = await observed(),
+    up = state.upstreams[0];
+  up.emit("open");
+  const { id } = JSON.parse(up.send.mock.calls[0][0]);
+  up.emit("message", Buffer.from(JSON.stringify({ id, code: 200 })));
+  await vi.waitFor(() =>
+    expect(frames.at(-1)).toMatchObject({
+      code: "UNKNOWN_BROKER_RESPONSE",
+      subscriptionSent: false,
+      subscriptionAckReceived: false,
+    }),
+  );
+  up.send.mock.calls[0][1]();
+  await vi.waitFor(() =>
+    expect(frames.at(-1)).toMatchObject({
+      type: "diagnostic",
+      subscriptionSent: true,
+      subscriptionAckReceived: false,
+    }),
+  );
+  expect(frames.filter((f) => f.type === "status").at(-1).code).toBe(
+    "UNKNOWN_BROKER_RESPONSE",
+  );
+  expect(frames.some((f) => f.code === "WAITING_FOR_BROKER_TICK")).toBe(false);
+});

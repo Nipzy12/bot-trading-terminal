@@ -1,3 +1,35 @@
+// Explicit public WS error subset, checked against Exness PublicApiErrorCode.
+export const brokerErrorCategories = {
+  1: "RATE_LIMITED",
+  2: "EXNESS_PROVIDER_UNAVAILABLE",
+  3: "EXNESS_PROVIDER_UNAVAILABLE",
+  1000: "EXNESS_AUTH",
+  1001: "EXNESS_AUTH",
+  1002: "EXNESS_PERMISSION",
+  2000: "EXNESS_ACCOUNT_UNAVAILABLE",
+  2001: "EXNESS_ACCOUNT_UNAVAILABLE",
+  2002: "EXNESS_ACCOUNT_UNAVAILABLE",
+  3000: "EXNESS_SUBSCRIPTION_INVALID",
+  3001: "EXNESS_SUBSCRIPTION_INVALID",
+  3015: "RATE_LIMITED",
+  4000: "EXNESS_INSTRUMENT_UNAVAILABLE",
+  4003: "EXNESS_MARKET_CLOSED",
+  4004: "EXNESS_NO_QUOTES",
+} as const;
+export type BrokerErrorCode = keyof typeof brokerErrorCategories;
+export function safeBrokerErrorCode(
+  value: unknown,
+): BrokerErrorCode | undefined {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    Object.hasOwn(brokerErrorCategories, value)
+    ? (value as BrokerErrorCode)
+    : undefined;
+}
+export const brokerStatuses = [
+  ...new Set(Object.values(brokerErrorCategories)),
+  "UNKNOWN_BROKER_RESPONSE",
+] as const;
 export const networkCodes = [
   "ENOTFOUND",
   "EAI_AGAIN",
@@ -109,6 +141,7 @@ export const internalCodes = [
   "WS_SUBPROTOCOL_MISSING",
   "WS_SUBPROTOCOL_MISMATCH",
   "SUBSCRIPTION_SEND_FAILED",
+  "ACK_CONTRACT_UNVERIFIED",
   "HANDSHAKE_DEADLINE",
   "HTTP_REJECTED",
   "SOCKET_CLOSED",
@@ -128,9 +161,11 @@ export type LiveDiagnostic = {
   phase: NetworkPhase;
   upstreamOpened: boolean;
   subscriptionSent: boolean;
+  subscriptionAckReceived: boolean;
   firstValidTickReceived: boolean;
   closeCode?: number;
   internalCode?: string;
+  brokerErrorCode?: BrokerErrorCode;
 };
 export function liveDiagnostic(value: unknown): LiveDiagnostic | undefined {
   if (!value || typeof value !== "object") return;
@@ -146,7 +181,11 @@ export function liveDiagnostic(value: unknown): LiveDiagnostic | undefined {
     phase: v.phase as NetworkPhase,
     upstreamOpened: v.upstreamOpened as boolean,
     subscriptionSent: v.subscriptionSent as boolean,
+    subscriptionAckReceived: v.subscriptionAckReceived === true,
     firstValidTickReceived: v.firstValidTickReceived as boolean,
+    ...(safeBrokerErrorCode(v.brokerErrorCode) !== undefined
+      ? { brokerErrorCode: safeBrokerErrorCode(v.brokerErrorCode) }
+      : {}),
     ...(safeCloseCode(v.closeCode) !== undefined
       ? { closeCode: safeCloseCode(v.closeCode) }
       : {}),
@@ -164,6 +203,9 @@ export function streamStatusLabel(code: string, value: unknown) {
       ? (value as Record<string, unknown>)
       : {};
   const parts = [code];
+  const brokerErrorCode = safeBrokerErrorCode(v.brokerErrorCode);
+  if (brokerErrorCode !== undefined)
+    parts.push(`brokerErrorCode=${brokerErrorCode}`);
   if (v.stage === "WS_HTTP_REJECTED" && code !== v.stage) parts.push(v.stage);
   if (
     typeof v.httpStatus === "number" &&

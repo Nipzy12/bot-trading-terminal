@@ -1,6 +1,7 @@
 import tls from "node:tls";
 import type { LookupAddress } from "node:dns";
 import {
+  brokerStatuses,
   networkCodes,
   liveDiagnostic,
   networkStages,
@@ -81,6 +82,7 @@ export function pinnedTlsOptions(
 }
 
 const observations = [
+  ...brokerStatuses,
   ...networkStages,
   ...preflightCodes,
   "PHASE_CHANGED",

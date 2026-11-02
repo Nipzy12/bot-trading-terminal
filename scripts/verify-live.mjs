@@ -56,16 +56,15 @@ try {
   ]) {
     await page.evaluate(
       (code) =>
-        window.sockets
-          .at(-1)
-          .emit({
-            type: "status",
-            code,
-            phase: "OPEN",
-            upstreamOpened: true,
-            subscriptionSent: code !== "WS_CONNECTED",
-            firstValidTickReceived: false,
-          }),
+        window.sockets.at(-1).emit({
+          type: "status",
+          code,
+          phase: "OPEN",
+          upstreamOpened: true,
+          subscriptionSent: code !== "WS_CONNECTED",
+          subscriptionAckReceived: false,
+          firstValidTickReceived: false,
+        }),
       code,
     );
     await page.getByRole("status").filter({ hasText: code }).waitFor();
@@ -86,6 +85,36 @@ try {
       "EXNESS · LIVE",
     );
   }
+  await page.evaluate(() =>
+    window.sockets.at(-1).emit({
+      type: "status",
+      code: "UNKNOWN_BROKER_RESPONSE",
+      internalCode: "ACK_CONTRACT_UNVERIFIED",
+      phase: "OPEN",
+      upstreamOpened: true,
+      subscriptionSent: true,
+      subscriptionAckReceived: false,
+      firstValidTickReceived: false,
+      id: "DO_NOT_DISPLAY_PRIVATE_REQUEST_ID",
+      error_message: "DO_NOT_DISPLAY_RAW_FRAME",
+    }),
+  );
+  await page
+    .getByRole("status")
+    .filter({ hasText: "UNKNOWN_BROKER_RESPONSE" })
+    .waitFor();
+  assert.match(
+    await page.locator(".live-diagnostic").textContent(),
+    /subscriptionAckReceived=false/,
+  );
+  assert.equal(
+    await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),
+    true,
+  );
+  assert.equal(
+    (await page.locator("body").textContent()).includes("DO_NOT_DISPLAY"),
+    false,
+  );
   await page.evaluate(() => {
     const interval = 3600,
       end = Math.floor(Date.now() / 1000 / interval) * interval;
@@ -147,6 +176,39 @@ try {
     );
   }
   assert.equal(polling, 0);
+  for (const [code, brokerErrorCode] of [
+    ["EXNESS_PERMISSION", 1002],
+    ["EXNESS_SUBSCRIPTION_INVALID", 3000],
+    ["UNKNOWN_BROKER_RESPONSE", 987654321],
+  ]) {
+    await page.evaluate(
+      ([code, brokerErrorCode]) =>
+        window.sockets.at(-1).emit({
+          type: "status",
+          code,
+          brokerErrorCode,
+          phase: "OPEN",
+          upstreamOpened: true,
+          subscriptionSent: true,
+          subscriptionAckReceived: false,
+          firstValidTickReceived: false,
+          id: "DO_NOT_DISPLAY_REQUEST_ID",
+          error_message: "DO_NOT_DISPLAY_RAW_ERROR",
+        }),
+      [code, brokerErrorCode],
+    );
+    await page.getByRole("status").filter({ hasText: code }).waitFor();
+    assert.equal(
+      await page.getByRole("button", { name: "Buy XAUUSD" }).isDisabled(),
+      true,
+    );
+    const text = await page.locator("body").textContent();
+    assert.equal(text.includes("DO_NOT_DISPLAY"), false);
+    if (brokerErrorCode === 987654321)
+      assert.equal(text.includes("987654321"), false);
+    else
+      assert.equal(text.includes(`brokerErrorCode=${brokerErrorCode}`), true);
+  }
   for (const code of [
     "DNS_FAILED",
     "TCP_CONNECT_FAILED",
@@ -216,6 +278,12 @@ try {
     window.sockets.at(-1).emit({
       type: "status",
       code: "RATE_LIMITED",
+      brokerErrorCode: 3015,
+      phase: "OPEN",
+      upstreamOpened: true,
+      subscriptionSent: true,
+      subscriptionAckReceived: false,
+      firstValidTickReceived: false,
       rateLimitSource: "EXNESS_WS",
       retryAfterSec: 5,
     }),
