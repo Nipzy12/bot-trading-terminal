@@ -20,7 +20,8 @@
     "test:paper:browser": "node scripts/verify-paper-sources.mjs",
     "test:backtest:browser": "node scripts/verify-backtest.mjs",
     "test:live:browser": "node scripts/verify-live.mjs",
-    "test:live:csp": "node scripts/verify-live-csp.mjs"
+    "test:live:csp": "node scripts/verify-live-csp.mjs",
+    "test:monitor:browser": "node scripts/verify-monitor.mjs"
   },
   "repository": {
     "type": "git",

@@ -136,6 +136,7 @@ describe("credential vault and private API", () => {
       ["delete", "/connections/11111111-1111-4111-8111-111111111111"],
       ["get", "/market?symbol=XAUUSD"],
       ["get", "/backtest/history?symbol=XAUUSD"],
+      ["get", "/monitor"],
     ] as const) {
       expect((await request(app())[method]("/api/account" + path)).status).toBe(
         401,
@@ -546,6 +547,111 @@ describe("credential vault and private API", () => {
       await b.reuse(db, "alice", "pending-id", "XAUUSD", 3600, fresh),
     ).toEqual({ safe: false });
     expect(fresh).toHaveBeenCalledTimes(1);
+  });
+  it("returns only owner-selected monitor fields and rejects selection/session changes", async () => {
+    const id = (await connect()).body.id;
+    await request(app())
+      .post(`/api/account/connections/${id}/test`)
+      .set(headers());
+    await request(app())
+      .post("/api/account/selection")
+      .set(headers())
+      .send({ id });
+    const snapshot = {
+      balance: "15234.99",
+      equity: "15100.01",
+      used_margin: "100.02",
+      currency: "USD",
+      asOf: new Date().toISOString(),
+      status: "SNAPSHOT",
+    };
+    const monitor = vi.fn(async () => snapshot);
+    const service = app({
+      reader: () => ({
+        testConnection: async () => ({ success: true, stages: [] }),
+        candles: async () => [],
+        accountMonitor: monitor,
+      }),
+    });
+    const r = await request(service).get("/api/account/monitor");
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual(snapshot);
+    for (const value of Object.values(secret))
+      expect(r.text).not.toContain(value);
+    principal = bob;
+    expect((await request(service).get("/api/account/monitor")).status).toBe(
+      409,
+    );
+    expect(monitor).toHaveBeenCalledTimes(1);
+    principal = alice;
+    const changed = app({
+      reader: () => ({
+        testConnection: async () => ({ success: true, stages: [] }),
+        candles: async () => [],
+        accountMonitor: async () => {
+          await db.query("DELETE FROM nexus_selection WHERE user_id=$1", [
+            "alice",
+          ]);
+          return snapshot;
+        },
+      }),
+    });
+    expect((await request(changed).get("/api/account/monitor")).status).toBe(
+      401,
+    );
+  });
+  it("discards monitor data if the session is revoked during the snapshot read", async () => {
+    const id = (await connect()).body.id;
+    await request(app())
+      .post(`/api/account/connections/${id}/test`)
+      .set(headers());
+    await request(app())
+      .post("/api/account/selection")
+      .set(headers())
+      .send({ id });
+    const service = app({
+      reader: () => ({
+        testConnection: async () => ({ success: true, stages: [] }),
+        candles: async () => [],
+        accountMonitor: async () => {
+          principal = null;
+          return {
+            balance: "1.00",
+            equity: "1.00",
+            used_margin: "0",
+            currency: "USD",
+            asOf: new Date().toISOString(),
+            status: "SNAPSHOT",
+          };
+        },
+      }),
+    });
+    const r = await request(service).get("/api/account/monitor");
+    expect(r.status).toBe(401);
+    expect(r.body).toEqual({ status: "UNAVAILABLE" });
+  });
+  it("fails monitor unavailable on provider rate rejection without fabricated balances", async () => {
+    const id = (await connect()).body.id;
+    await request(app())
+      .post(`/api/account/connections/${id}/test`)
+      .set(headers());
+    await request(app())
+      .post("/api/account/selection")
+      .set(headers())
+      .send({ id });
+    const service = app({
+      reader: () => ({
+        testConnection: async () => ({ success: true, stages: [] }),
+        candles: async () => [],
+        accountMonitor: async () => {
+          throw new ProviderError("EXNESS_RATE_LIMIT", 429, 12);
+        },
+      }),
+    });
+    const r = await request(service).get("/api/account/monitor");
+    expect(r.status).toBe(429);
+    expect(r.headers["retry-after"]).toBe("12");
+    expect(r.body).toEqual({ status: "UNAVAILABLE" });
   });
   it("enforces one durable stream lease and allows recovery after TTL", async () => {
     const sql =

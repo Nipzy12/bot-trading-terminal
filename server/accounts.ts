@@ -1,3 +1,4 @@
+import { brokerSnapshot } from "../src/broker-monitor.js";
 import { historyFailure } from "./history-errors.js";
 import { historyQuery } from "./backtest-history.js";
 import express, { type Request } from "express";
@@ -16,6 +17,7 @@ export type Identity = {
   session: { id: string };
 };
 type Reader = {
+  accountMonitor?: () => Promise<unknown>;
   testConnection: () => Promise<ConnectionReport>;
   historyPage?: (
     symbol: string,
@@ -333,6 +335,54 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
       `${(res.locals.identity as Identity).user.id}:${req.params.id}`,
     );
     res.json({ deleted: true });
+  });
+  router.get("/monitor", async (req, res) => {
+    const identity = res.locals.identity as Identity,
+      owner = identity.user.id;
+    const rows = await deps
+      .db()
+      .query(
+        "SELECT c.id,c.envelope FROM nexus_private.nexus_credentials c JOIN nexus_private.nexus_selection s ON s.credential_id=c.id AND s.user_id=c.user_id WHERE c.user_id=$1 AND c.status='verified'",
+        [owner],
+      );
+    const row = rows.rows[0];
+    if (!row) {
+      res.status(409).json({ status: "UNAVAILABLE" });
+      return;
+    }
+    try {
+      if (!(await takeRate(deps.db(), `monitor:${owner}:${row.id}`, 6, 60))) {
+        res.status(429).json({ status: "UNAVAILABLE" });
+        return;
+      }
+      const config = decrypt(row.envelope, owner, row.id) as Config;
+      safeOrigin(config.gateway);
+      const data = brokerSnapshot.parse(
+        await deps.reader(config, owner, row.id).accountMonitor?.(),
+      );
+      const valid = await deps
+        .db()
+        .query(
+          "SELECT c.id FROM nexus_private.nexus_credentials c JOIN nexus_private.nexus_selection s ON s.credential_id=c.id AND s.user_id=c.user_id WHERE c.id=$1 AND c.user_id=$2 AND c.status='verified'",
+          [row.id, owner],
+        );
+      const current = await deps.identity(req);
+      if (
+        !valid.rows.length ||
+        current?.user.id !== owner ||
+        current.session.id !== identity.session.id
+      ) {
+        res.status(401).json({ status: "UNAVAILABLE" });
+        return;
+      }
+      res.json(data);
+    } catch (error) {
+      if (error instanceof ProviderError && error.retryAfter)
+        res.set("Retry-After", String(error.retryAfter));
+      res
+        .status(error instanceof ProviderError ? error.status : 502)
+        .json({ status: "UNAVAILABLE" });
+    }
   });
   router.get(["/market", "/backtest/history"], async (req, res) => {
     const isHistory = req.path === "/backtest/history";

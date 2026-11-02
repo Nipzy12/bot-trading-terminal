@@ -1,4 +1,9 @@
 import {
+  brokerState,
+  brokerSnapshot,
+  type BrokerSnapshot,
+} from "../src/broker-monitor.js";
+import {
   createHash,
   createPrivateKey,
   createPublicKey,
@@ -153,6 +158,8 @@ export class ExnessReader {
   private initializedAt = 0;
   private initializing?: Promise<void>;
   private limits?: Limits;
+  private balanceCache?: { at: number; value: BrokerSnapshot };
+  private balancePending?: Promise<BrokerSnapshot>;
   private cooldown = 0;
   private cooldownKnown = false;
   private limitsRaw?: { at: number; value: unknown };
@@ -304,6 +311,7 @@ export class ExnessReader {
       this.initializedAt = 0;
       this.cache.clear();
       this.pages.clear();
+      this.balanceCache = undefined;
       throw new ProviderError(
         "EXNESS_RATE_LIMIT",
         429,
@@ -559,6 +567,58 @@ export class ExnessReader {
       }
     }
     return { success: true, stages, candleCount, ...diagnostics };
+  }
+  async accountMonitor(): Promise<BrokerSnapshot> {
+    if (this.balanceCache && this.now() - this.balanceCache.at < 10000)
+      return this.balanceCache.value;
+    if (this.balancePending) return this.balancePending;
+    const signal = AbortSignal.timeout(7000);
+    const task = bounded(async () => {
+      await this.initialize(signal);
+      const details = z
+        .object({
+          account_id: z.string(),
+          create_date: z.iso.datetime({ offset: true }),
+          settings: z.object({
+            currency: z.string().regex(/^[A-Za-z][A-Za-z0-9]{1,11}$/),
+          }),
+        })
+        .safeParse(
+          await this.get(
+            this.ap!,
+            `/v1/configuration/accounts/${this.config.accountId}/account`,
+            signal,
+            "getAccountDetails",
+          ),
+        );
+      if (!details.success || details.data.account_id !== this.config.accountId)
+        throw new ProviderError("EXNESS_INVALID_RESPONSE");
+      const raw = z
+        .object({ account_state: brokerState })
+        .safeParse(
+          await this.get(
+            this.ap!,
+            `/v1/trading/accounts/${this.config.accountId}/snapshot`,
+            signal,
+            "getTradingStateSnapshot",
+          ),
+        );
+      if (!raw.success) throw new ProviderError("EXNESS_INVALID_RESPONSE");
+      const value = brokerSnapshot.parse({
+        ...raw.data.account_state,
+        currency: details.data.settings.currency,
+        asOf: new Date(this.now()).toISOString(),
+        status: "SNAPSHOT",
+      });
+      this.balanceCache = { at: this.now(), value };
+      return value;
+    }, signal);
+    this.balancePending = task;
+    try {
+      return await task;
+    } finally {
+      this.balancePending = undefined;
+    }
   }
   async prepareLive(symbol: string) {
     const cached = this.liveMeta.get(symbol);

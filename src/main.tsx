@@ -1,3 +1,4 @@
+import { BrokerMonitor } from "./BrokerMonitor";
 import type { RateInfo } from "./live-diagnostics";
 import { useLive } from "./use-live";
 import { updateBars } from "./live";
@@ -654,13 +655,14 @@ function App() {
           </div>
           <div className="metric">
             <span>
-              Saldo virtual <Wallet size={13} />
+              NEXUS PAPER · Saldo Virtual <Wallet size={13} />
             </span>
             <strong>${fmt(10000 + realized)}</strong>
             <small>
               {accountLabel} · USD · Realized ${fmt(realized)}
             </small>
           </div>
+          <BrokerMonitor />
           <div className="metric">
             <span>Posisi terbuka</span>
             <strong>

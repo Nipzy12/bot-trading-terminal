@@ -1,3 +1,4 @@
+import { notifyAccountChange } from "./account-notify";
 import { useEffect, useState, type FormEvent } from "react";
 import {
   parseReport,
@@ -54,6 +55,7 @@ export function AccountManagement() {
                 : "Layanan belum tersedia atau permintaan ditolak.",
       );
     }
+    if (method !== "GET") notifyAccountChange();
     return data;
   }
   async function load() {
@@ -117,6 +119,7 @@ export function AccountManagement() {
           "Login/registrasi ditolak. Periksa email dan password, atau coba kembali nanti.",
         );
       await load();
+      notifyAccountChange();
     } catch (e) {
       setMessage((e as Error).message);
     } finally {
@@ -327,6 +330,7 @@ export function AccountManagement() {
                       throw Error(
                         "Logout gagal. Coba lagi sebelum meninggalkan perangkat.",
                       );
+                    notifyAccountChange();
                     setSession(null);
                     setAccounts([]);
                   } catch (error) {
