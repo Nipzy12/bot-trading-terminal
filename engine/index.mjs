@@ -5,6 +5,11 @@ import { stdin, stdout } from "node:process";
 
 const origin = "https://bot-trading-terminal.vercel.app";
 const relayTest = process.argv.includes("--relay-test");
+const brokerProbe = process.argv.includes("--broker-probe");
+if (relayTest && brokerProbe) {
+  console.error("Pilih hanya satu mode: --broker-probe atau --relay-test");
+  process.exit(1);
+}
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let stopped = false;
 process.on("SIGINT", () => { stopped = true; console.log("\nNEXUS Engine dihentikan."); });
@@ -26,7 +31,9 @@ async function send(path, body, token) {
   }
   return result;
 }
-console.log(relayTest ? "NEXUS Engine V6.2A · RELAY TEST ONLY" : "NEXUS Engine V6.1 · HEARTBEAT ONLY");
+console.log(brokerProbe ? "NEXUS Engine V6.2B · EXNESS READ-ONLY PROBE" :
+  relayTest ? "NEXUS Engine V6.2A · RELAY TEST ONLY" : "NEXUS Engine V6.1 · HEARTBEAT ONLY");
+if (brokerProbe) console.log("Uji WebSocket maksimal 65 detik. Token tanda tangan Exness hanya di memori. Tidak ada order dan tidak ada relay harga.");
 if (relayTest) console.log("Data XAUUSD adalah FIXTURE SIMULASI, bukan Exness. Tidak dipakai untuk trading.");
 console.log("Semua broker order dinonaktifkan; tidak ada Exness API key di laptop.");
 console.log("Buka https://bot-trading-terminal.vercel.app/accounts di browser, login Sesi NEXUS, lalu buat kode pairing.");
@@ -44,11 +51,21 @@ if (!/^[A-Za-z0-9_-]{32}$/.test(code)) {
     const token = paired.token; // Memory only. Never write to disk, stdout or environment.
     console.log("Pairing berhasil. Kirim heartbeat tiap 10 detik. Tekan Ctrl+C untuk berhenti.");
     let failures = 0;
+    let probeStarted = false;
+    let probeTask;
     while (!stopped) {
       try {
         await send("/api/engine/heartbeat", {}, token);
         if (failures) console.log("Koneksi pulih.");
         failures = 0;
+        if (brokerProbe && !probeStarted) {
+          probeStarted = true;
+          probeTask = import("./broker-probe.mjs").then(({ runBrokerProbe }) =>
+            runBrokerProbe(token, send, () => stopped)
+          ).catch(() => {
+            console.error("Broker probe gagal secara aman. Periksa akun terpilih, jaringan, TLS dan batas rate.");
+          }).finally(() => { stopped = true; });
+        }
         if (relayTest) {
           try {
             await send("/api/engine/relay-test", {
@@ -74,6 +91,7 @@ if (!/^[A-Za-z0-9_-]{32}$/.test(code)) {
       }
       if (!stopped) await sleep(10_000);
     }
+    await probeTask;
   } catch (error) {
     console.error("Tidak dapat pairing: " + (error.status ?? "NETWORK_OR_CONFIG") + ". Cek login, kode, jaringan dan deployment V6.1.");
     process.exitCode = 1;

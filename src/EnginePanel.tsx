@@ -76,7 +76,8 @@ export function EnginePanel({ csrfToken }: { csrfToken: string }) {
       {relay?.fresh && relay.symbol && relay.bid !== null && relay.ask !== null && (
         <p>{relay.symbol} · Bid {relay.bid.toFixed(2)} · Ask {relay.ask.toFixed(2)} · <strong>SIMULASI, BUKAN EXNESS</strong></p>
       )}
-      <p>Relay TEST_ONLY tidak mengubah chart, saldo, P&L, harga order, atau robot. Untuk data Exness sebenarnya diperlukan autentikasi broker khusus di laptop pada tahap berikutnya.</p>
+      <p>Relay TEST_ONLY tidak mengubah chart, saldo, P&L, harga order, atau robot.</p>
+      <p><strong>V6.2B · Broker probe terbatas:</strong> setelah pembaruan dan pairing baru, jalankan <code>node engine/index.mjs --broker-probe</code> di laptop. Mode ini membuka koneksi WebSocket Exness selama maksimal 65 detik, menampilkan hanya jumlah tick valid, dan tidak mengirim kuotasi ke website. Token signed GET sementara diteruskan ke laptop untuk handshake; jangan merekam log/traffic saat probe.</p>
     </section>
   );
 }
