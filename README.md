@@ -390,3 +390,19 @@ position retention, task panels, and 360/390/412/1440px layouts. Existing behavi
 browser suites use `workspace-navigation.mjs` to open the appropriate page/tab
 before interacting (real navigation, never forced clicks on hidden controls).
 Mocked broker/session tests continue to distinguish mocks from real broker ticks.
+
+
+## V6.1 Windows Engine: safe pairing and heartbeat only
+
+This release provides a **separate, manually started Windows Node process** with pairing and heartbeat. It does NOT read Exness keys, connect to the broker, relay ticks, run a robot, or execute broker orders. The terminal continues to use its existing DEMO / EXNESS HISTORY / browser LIVE feeds. The engine feature is owner-only and independent of Google profile login.
+
+1. Deploy the V6.1 branch after its build/tests pass. Vercel's \`vercel-build\` runs the idempotent \`migrations/002_engine.sql\` on the existing PostgreSQL database. Never copy database credentials or encryption keys to the laptop.
+2. On the **canonical** \`https://bot-trading-terminal.vercel.app/accounts\`, sign into the **NEXUS private workspace** (not only Firebase Google).
+3. Under **NEXUS Engine · Windows**, press **Buat kode pairing laptop**. The 32-character, high-entropy, single-use code expires in 5 minutes. It is visible only once and never saved in browser storage.
+4. On Windows PowerShell, within the checked-out repository, run \`node engine/index.mjs\`; paste the pairing code. A random device bearer token is returned over HTTPS and remains only in process memory. It is never printed or persisted; restarting the engine requires a new code.
+5. While the program is running, the Accounts page displays **ONLINE** after the first acknowledged heartbeat. After about 30 seconds without an acknowledged heartbeat, it displays **OFFLINE**. Stop with **Ctrl+C**. Revoke immediately using **Cabut akses laptop** if access should be invalidated.
+6. No inbound port, dynamic DNS, VPS, Railway, broker key, environment secret or extra hosting is required. Heartbeats use PostgreSQL and existing Vercel Functions; subject to the existing free tier quotas.
+
+Implementation: all device claims are single-use atomic PostgreSQL DELETE + INSERT; both owner routes inherit session, exact Origin, CSRF token and rate checks; device claims and heartbeats have centrally enforced rate limits. Device bearer tokens and pairing codes are held in the database **only as HMAC-SHA256 hashes**. There is one active device per owner, and pairing replaces its prior token. The public device endpoints cannot read private market data or perform trades. The code is not intended to stay paired after Windows reboots.
+
+**Safety:** Do not paste Exness API keys, signed headers or local production DATABASE_URL into the CLI. V6.2 would need a separately reviewed, owner-scoped, freshness-gated price relay before any Exness market stream could be moved to the laptop.

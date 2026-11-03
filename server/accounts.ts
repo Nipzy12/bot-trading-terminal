@@ -1,4 +1,5 @@
 import { brokerSnapshot } from "../src/broker-monitor.js";
+import { ownerEngineRouter } from "./engine.js";
 import { historyFailure } from "./history-errors.js";
 import { historyQuery } from "./backtest-history.js";
 import express, { type Request } from "express";
@@ -178,6 +179,7 @@ export function accountRouter(overrides: Partial<Dependencies> = {}) {
       res.status(503).json({ error: "ACCOUNT_SERVICE_UNAVAILABLE" });
     }
   });
+  router.use("/engine", ownerEngineRouter());
   router.get("/session", (_req, res) => {
     const identity = res.locals.identity as Identity;
     res.json({ user: { name: identity.user.name }, csrfToken: csrf(identity) });

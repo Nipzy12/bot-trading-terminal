@@ -1,0 +1,69 @@
+import { useEffect, useState } from "react";
+
+type EngineStatus = {
+  status: "ONLINE" | "OFFLINE" | "UNPAIRED";
+  label: string | null;
+  lastSeenAt: string | null;
+};
+export function EnginePanel({ csrfToken }: { csrfToken: string }) {
+  const [state, setState] = useState<EngineStatus | null>(null);
+  const [code, setCode] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  async function refresh() {
+    const response = await fetch("/api/account/engine/status", { credentials: "same-origin", cache: "no-store" });
+    if (!response.ok) throw Error("Status engine tidak tersedia.");
+    setState(await response.json());
+  }
+  useEffect(() => {
+    let active = true;
+    async function check() {
+      try {
+        const r = await fetch("/api/account/engine/status", { credentials: "same-origin", cache: "no-store" });
+        if (r.ok && active) setState(await r.json());
+      } catch { /* Offline can be displayed on next poll. */ }
+    }
+    void check();
+    const timer = window.setInterval(check, 15_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [csrfToken]);
+
+  async function mutate(path: string) {
+    setBusy(true); setMessage("");
+    try {
+      const r = await fetch("/api/account/engine/" + path, {
+        method: "POST", credentials: "same-origin",
+        headers: { "X-CSRF-Token": csrfToken, "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw Error(data.error === "RATE_LIMITED" ? "Batas pairing tercapai. Coba nanti." : "Permintaan ditolak, periksa sesi NEXUS.");
+      if (path === "pair-code") {
+        if (typeof data.code !== "string") throw Error("Kode pairing tidak tersedia.");
+        setCode(data.code);
+        setMessage("Kode ini hanya berlaku 5 menit dan hanya bisa dipakai sekali. Jangan dibagikan.");
+      } else {
+        setCode(""); setMessage("Pairing dibatalkan dan akses engine dicabut.");
+      }
+      await refresh();
+    } catch (e) { setMessage((e as Error).message); }
+    finally { setBusy(false); }
+  }
+  return (
+    <section className="panel account-box" aria-label="NEXUS Engine Windows">
+      <h2>NEXUS Engine · Windows</h2>
+      <p>Pair laptop untuk mengirim heartbeat. Belum ada koneksi Exness atau robot lokal pada tahap V6.1.</p>
+      <p role="status">
+        Status: <strong className={state?.status === "ONLINE" ? "green" : "muted"}>{state?.status ?? "MEMERIKSA"}</strong>
+        {state?.lastSeenAt ? " · Terakhir: " + new Date(state.lastSeenAt).toLocaleString("id-ID") : ""}
+      </p>
+      <div className="connection-actions">
+        <button disabled={busy} className="primary" onClick={() => void mutate("pair-code")}>Buat kode pairing laptop</button>
+        <button disabled={busy || state?.status === "UNPAIRED"} onClick={() => void mutate("revoke")}>Cabut akses laptop</button>
+      </div>
+      {code && <p>Kode sekali pakai: <code style={{ userSelect: "all", fontWeight: 700, overflowWrap: "anywhere" }}>{code}</code></p>}
+      {message && <p role="status">{message}</p>}
+      <p>Jalankan <code>node engine/index.mjs</code> di laptop Windows setelah V6.1 terpasang di website.</p>
+    </section>
+  );
+}

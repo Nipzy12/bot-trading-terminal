@@ -24,7 +24,8 @@ try {
       "utf8",
     ),
   );
-  console.log("NEXUS account schema ready");
+  await db.query(await readFile(new URL("../migrations/002_engine.sql", import.meta.url), "utf8"));
+  console.log("NEXUS account and Windows engine schema ready");
 } catch {
   console.error(
     "Migration failed; verify database connectivity and schema permissions.",

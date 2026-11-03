@@ -1,4 +1,5 @@
 import { notifyAccountChange } from "./account-notify";
+import { EnginePanel } from "./EnginePanel";
 import { useEffect, useState, type FormEvent } from "react";
 import {
   parseReport,
@@ -351,6 +352,7 @@ export function AccountManagement() {
               Connect Exness
             </button>
           </section>
+          <EnginePanel csrfToken={session.csrfToken} />
           {showConnect && (
             <section className="panel account-box">
               <h2>Connect Exness · kebijakan baca-saja</h2>
