@@ -232,7 +232,7 @@ try {
       exact: true,
     })
     .waitFor();
-  await page.getByRole("button", { name: "Keluar", exact: true }).click();
+  await page.getByRole("button", { name: "Keluar · Sesi NEXUS", exact: true }).click();
   await page.getByLabel("Email", { exact: true }).waitFor();
   assert.deepEqual(errors, []);
   console.log(

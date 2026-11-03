@@ -1,3 +1,4 @@
+import { workspacePage } from "./workspace-navigation.mjs";
 import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
 const browser = await chromium.launch({
@@ -6,9 +7,11 @@ const browser = await chromium.launch({
   args: ["--no-sandbox"],
 });
 try {
-  const page = await browser.newPage({
-    viewport: { width: 1440, height: 1100 },
-  });
+  const page = await browser
+    .newPage({
+      viewport: { width: 1440, height: 1100 },
+    })
+    .then(workspacePage);
   page.setDefaultTimeout(15000);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -133,9 +136,11 @@ try {
       .isDisabled(),
     true,
   );
-  const providerPage = await browser.newPage({
-    viewport: { width: 1440, height: 1000 },
-  });
+  const providerPage = await browser
+    .newPage({
+      viewport: { width: 1440, height: 1000 },
+    })
+    .then(workspacePage);
   providerPage.setDefaultTimeout(15000);
   providerPage.on("pageerror", (e) => errors.push(e.message));
   let mode = "rate",

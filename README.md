@@ -360,3 +360,33 @@ existing broker WS restrictions remain intact.
 `npm run test:google:browser` verifies missing-config DEMO at 360/390/412/1440px
 and mocked profile/login/logout. OAuth with a real Google account still requires
 owner verification after Firebase setup; mocks do not prove production OAuth.
+
+### Task-focused NEXUS workspace
+
+The persistent navigation exposes `/` (Terminal), `/markets`, `/bot` (Trading
+Bot), `/backtest`, and `/accounts` (Profile & Accounts). Same-origin navigation
+with an unchanged feed query uses browser history without remounting the terminal
+market store or starting another upstream connection. Browser Back/Forward works.
+Changing the feed still uses the existing reload/source-isolation behavior.
+Paper positions/history and existing storage versions are unchanged.
+
+Desktop uses a sidebar and chart/order columns with positions below. Android
+uses bottom navigation and Chart / Order / Posisi tabs; only the selected terminal
+panel is visible. Balances expand separately, and safe WebSocket diagnostics are
+under Connection Details (closed initially). AutoPilot controls are on Trading
+Bot. A manually started bot continues across workspace navigation while its
+existing freshness, ownership, risk and quota guards remain active. Reload still
+starts with the robot off; emergency stop remains available on Terminal and Bot.
+No server-side robot or broker order was introduced.
+
+Profile & Accounts contains the Firebase Google profile/logout and the separate
+legacy NEXUS session/logout plus existing owner-protected Exness connections.
+Navigation does not merge accounts or sign either session out. All backend/API
+contracts, Exness credentials, read-only scopes and broker-order 403 remain intact.
+Reduced-motion preferences suppress animation/transitions; status dots do not blink.
+
+`npm run test:workspace:browser` tests actual navigation, browser Back, paper
+position retention, task panels, and 360/390/412/1440px layouts. Existing behavioral
+browser suites use `workspace-navigation.mjs` to open the appropriate page/tab
+before interacting (real navigation, never forced clicks on hidden controls).
+Mocked broker/session tests continue to distinguish mocks from real broker ticks.

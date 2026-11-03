@@ -24,7 +24,8 @@
     "test:monitor:browser": "node scripts/verify-monitor.mjs",
     "test:live:session:browser": "node scripts/verify-live-session.mjs",
     "test:live:market:browser": "node scripts/verify-live-market.mjs",
-    "test:google:browser": "node scripts/verify-google.mjs"
+    "test:google:browser": "node scripts/verify-google.mjs",
+    "test:workspace:browser": "node scripts/verify-workspace.mjs"
   },
   "repository": {
     "type": "git",

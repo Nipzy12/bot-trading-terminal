@@ -1,3 +1,4 @@
+import { workspacePage } from "./workspace-navigation.mjs";
 import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
 const browser = await chromium.launch({
@@ -6,9 +7,11 @@ const browser = await chromium.launch({
   args: ["--no-sandbox"],
 });
 try {
-  const page = await browser.newPage({
-    viewport: { width: 1440, height: 1000 },
-  });
+  const page = await browser
+    .newPage({
+      viewport: { width: 1440, height: 1000 },
+    })
+    .then(workspacePage);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   let calls = 0,

@@ -178,7 +178,7 @@ export function AccountManagement() {
       </header>
       <section className="account-intro">
         <span className="eyebrow">PRIVATE WORKSPACE</span>
-        <h1>Account Management</h1>
+        <h2>Sesi NEXUS & koneksi Exness</h2>
         <p>
           Kebijakan NEXUS: operasi baca-saja. Scope API Key Exness belum
           diverifikasi dan tidak diubah oleh aplikasi. Semua order, SL/TP dan
@@ -340,7 +340,7 @@ export function AccountManagement() {
                   }
                 }}
               >
-                Keluar
+                Keluar · Sesi NEXUS
               </button>
             </div>
             <button

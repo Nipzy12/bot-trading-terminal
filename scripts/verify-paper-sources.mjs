@@ -1,3 +1,4 @@
+import { workspacePage } from "./workspace-navigation.mjs";
 import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
 const base = process.env.BASE_URL || "http://localhost:5173";
@@ -11,7 +12,9 @@ const ids = [
   "22222222-2222-4222-8222-222222222222",
 ];
 try {
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const page = await browser
+    .newPage({ viewport: { width: 390, height: 844 } })
+    .then(workspacePage);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.setDefaultTimeout(15000);
@@ -175,9 +178,11 @@ try {
     path: "/workspace/paper-accounts-desktop.png",
     fullPage: true,
   });
-  const pendingPage = await browser.newPage({
-    viewport: { width: 360, height: 844 },
-  });
+  const pendingPage = await browser
+    .newPage({
+      viewport: { width: 360, height: 844 },
+    })
+    .then(workspacePage);
   pendingPage.on("pageerror", (e) => errors.push(e.message));
   await pendingPage.addInitScript(
     (raw) => localStorage.setItem("nexus.paper.v1", raw),

@@ -1864,3 +1864,653 @@ main {
   overflow-wrap: anywhere;
   color: #aebed3;
 }
+
+/* NEXUS workspace: persistent market state, distinct task-focused pages. */
+:root {
+  --surface: #101621;
+  --line: #242f40;
+  --accent: #9baeff;
+  background: #080d15;
+}
+[hidden] {
+  display: none !important;
+}
+.nexus-shell {
+  min-height: 100dvh;
+}
+.primary-nav {
+  width: 200px;
+  position: fixed;
+  inset: 0 auto 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #0d131e;
+  border-right: 1px solid var(--line);
+  padding: 24px 14px;
+  z-index: 20;
+}
+.primary-nav > a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 12px;
+  color: #94a3bb;
+  border-radius: 8px;
+  min-height: 46px;
+}
+.primary-nav > a[aria-current="page"] {
+  color: #e0e7ff;
+  background: #202d48;
+  box-shadow: inset 2px 0 #98adff;
+}
+.primary-nav .shell-brand {
+  color: #acbaff;
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 30px;
+}
+.shell-brand span {
+  font-size: 17px;
+  letter-spacing: 3px;
+}
+.shell-brand small {
+  display: block;
+  font-size: 8px;
+  letter-spacing: 1px;
+  margin-top: 6px;
+  color: #8594ad;
+}
+.nav-foot {
+  margin-top: auto;
+  color: #6e819c;
+  padding: 12px;
+  font-size: 10px;
+  line-height: 1.8;
+  letter-spacing: 1.5px;
+}
+.shell-content {
+  margin-left: 200px;
+  min-width: 0;
+}
+.shell-topbar {
+  height: 70px;
+  padding: 0 24px;
+  gap: 16px;
+  background: #0c121c;
+}
+.shell-topbar > div {
+  margin-right: auto;
+  display: grid;
+  gap: 5px;
+}
+.shell-topbar strong {
+  font-size: 16px;
+}
+.profile-link {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+}
+.app {
+  display: block;
+  min-height: 0;
+}
+.app .workspace {
+  margin: 0;
+  width: 100%;
+  padding: 0 24px;
+}
+.account {
+  padding: 20px 0 16px;
+  gap: 16px;
+}
+.account > div:first-child,
+.account .session {
+  display: none;
+}
+.account .metric {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 18px;
+  flex: 1;
+  background: var(--surface);
+}
+.account .metric strong {
+  font-size: 23px;
+}
+.panel {
+  border-color: var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.paper-switch {
+  margin: 0 0 12px;
+  padding: 12px;
+}
+.paper-switch p {
+  margin: 5px 0 0;
+  font-size: 11px;
+}
+.mode-labels {
+  padding: 0;
+  margin: 12px 0;
+  gap: 8px;
+}
+.mode-labels > span {
+  font-size: 10px;
+}
+.ticker {
+  margin: 0 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.app main {
+  padding: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  grid-template-rows: auto auto;
+}
+.app .chart-panel {
+  grid-area: 1/1;
+  min-width: 0;
+}
+.app .order-panel {
+  grid-area: 1/2;
+  min-width: 0;
+}
+.app .positions {
+  grid-area: 2/1/3/3;
+  min-width: 0;
+}
+.app .watchlist,
+.app .bot-panel {
+  display: none;
+}
+.chart-wrap {
+  height: 440px;
+}
+.terminal-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0;
+}
+.robot-summary {
+  margin-right: auto;
+  color: #98a8c2;
+  font-size: 12px;
+}
+.terminal-tools .emergency {
+  margin: 0;
+  padding: 9px 12px;
+  width: auto;
+  min-height: 40px;
+  border: 1px solid #6c3443;
+  border-radius: 6px;
+  color: #ff9dae;
+}
+.mobile-panels {
+  display: none;
+}
+.connection-details {
+  margin: 8px 0;
+  color: #a8b6cf;
+}
+.connection-details summary {
+  cursor: pointer;
+  padding: 8px 0;
+  width: fit-content;
+}
+.feed-warning {
+  margin: 12px 0 0;
+  border-radius: 8px;
+}
+.live-diagnostic {
+  overflow-wrap: anywhere;
+}
+.page-markets .account,
+.page-bot .account {
+  display: none;
+}
+.page-markets .workspace,
+.page-bot .workspace {
+  padding-top: 20px;
+}
+.page-markets main,
+.page-bot main {
+  display: block;
+}
+.page-markets .chart-panel,
+.page-markets .order-panel,
+.page-markets .positions,
+.page-markets .terminal-tools {
+  display: none;
+}
+.page-markets .watchlist {
+  display: block;
+  max-width: 1000px;
+  margin: auto;
+}
+.page-markets .watch-row {
+  padding: 16px 22px;
+}
+.page-bot .chart-panel,
+.page-bot .order-panel,
+.page-bot .positions,
+.page-bot .ticker,
+.page-bot .terminal-tools {
+  display: none;
+}
+.page-bot .bot-panel {
+  display: block;
+  max-width: 760px;
+  margin: 20px auto;
+  padding: 24px;
+}
+.bot-panel .robot {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.bot-panel .robot > p {
+  line-height: 1.8;
+}
+.bot-panel input {
+  max-width: 280px;
+  min-height: 44px;
+}
+.profile-page {
+  padding: 24px;
+  max-width: 1200px;
+  margin: auto;
+}
+.profile-intro h1 {
+  font-size: 28px;
+  margin: 10px 0;
+}
+.profile-intro p {
+  color: #9eacc2;
+  margin-bottom: 24px;
+}
+.profile-page .google-login {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+.profile-page .account-page {
+  padding: 0;
+  margin: 0;
+  max-width: none;
+  display: block;
+}
+.profile-page .account-page > header,
+.backtest-page > header {
+  display: none;
+}
+.account-intro {
+  margin-top: 24px;
+}
+.backtest-page {
+  min-width: 0;
+}
+.skip-link {
+  position: fixed;
+  top: -100px;
+  left: 10px;
+  padding: 12px;
+  background: #223b62;
+  z-index: 50;
+}
+.skip-link:focus {
+  top: 10px;
+}
+.status-dot,
+.live-dot,
+.live-indicator,
+.robot-running .status-dot {
+  animation: none !important;
+}
+@media (max-width: 1100px) {
+  .primary-nav {
+    width: 170px;
+    padding-inline: 8px;
+  }
+  .shell-content {
+    margin-left: 170px;
+  }
+  .app .workspace {
+    padding-inline: 16px;
+  }
+  .app main {
+    grid-template-columns: minmax(0, 1fr) 270px;
+  }
+  .account {
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 760px) {
+  .primary-nav {
+    width: 100%;
+    inset: auto 0 0;
+    height: calc(66px + env(safe-area-inset-bottom));
+    padding: 5px 3px calc(5px + env(safe-area-inset-bottom));
+    flex-direction: row;
+    gap: 0;
+    border-top: 1px solid var(--line);
+    border-right: 0;
+    background: #0d1420;
+  }
+  .primary-nav > a:not(.shell-brand) {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 6px 0;
+    font-size: 9px;
+    text-align: center;
+    justify-content: center;
+    border-radius: 6px;
+  }
+  .primary-nav > a[aria-current="page"] {
+    box-shadow: inset 0 2px #98adff;
+  }
+  .primary-nav .shell-brand,
+  .nav-foot {
+    display: none;
+  }
+  .shell-content {
+    margin: 0;
+    padding-bottom: calc(80px + env(safe-area-inset-bottom));
+  }
+  .shell-topbar {
+    padding: 0 12px;
+    height: 62px;
+    gap: 10px;
+  }
+  .shell-topbar .eyebrow {
+    font-size: 8px;
+  }
+  .shell-topbar strong {
+    font-size: 14px;
+  }
+  .profile-link {
+    font-size: 10px;
+    padding: 8px;
+  }
+  .app .workspace {
+    padding: 0 10px;
+  }
+  .account {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    padding: 12px 0;
+  }
+  .account .metric {
+    min-width: 0;
+    margin: 0;
+    padding: 10px;
+  }
+  .account .metric strong {
+    font-size: 19px;
+  }
+  .account .metric small {
+    font-size: 9px;
+    overflow-wrap: anywhere;
+  }
+  .account .metric:nth-last-child(2) {
+    display: none;
+  }
+  .account .broker-monitor {
+    min-width: 0;
+  }
+  .paper-switch {
+    gap: 8px;
+    padding: 10px;
+  }
+  .paper-switch select {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .paper-switch a {
+    font-size: 10px;
+  }
+  .paper-switch p,
+  .mode-labels > span:nth-child(n + 4) {
+    display: none;
+  }
+  .mode-labels {
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .mode-labels > span {
+    font-size: 8px;
+  }
+  .page-terminal .ticker {
+    display: none;
+  }
+  .terminal-tools {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .mobile-panels {
+    display: flex;
+    width: 100%;
+    padding: 4px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .mobile-panels button {
+    flex: 1;
+    min-height: 38px;
+    border-radius: 5px;
+    color: #9dacc3;
+  }
+  .mobile-panels [aria-pressed="true"] {
+    background: #253450;
+    color: #edf1ff;
+  }
+  .robot-summary {
+    font-size: 10px;
+  }
+  .terminal-tools .emergency {
+    font-size: 10px;
+    min-height: 36px;
+  }
+  .app main {
+    display: block;
+  }
+  .app .chart-panel,
+  .app .order-panel,
+  .app .positions {
+    margin: 0;
+    width: 100%;
+  }
+  .page-terminal[data-mobile-panel="chart"] .order-panel,
+  .page-terminal[data-mobile-panel="chart"] .positions,
+  .page-terminal[data-mobile-panel="order"] .chart-panel,
+  .page-terminal[data-mobile-panel="order"] .positions,
+  .page-terminal[data-mobile-panel="positions"] .chart-panel,
+  .page-terminal[data-mobile-panel="positions"] .order-panel {
+    display: none;
+  }
+  .chart-wrap {
+    height: 340px;
+    min-height: 280px;
+  }
+  .chart-panel .panel-top {
+    padding: 12px;
+  }
+  .page-bot .bot-panel {
+    padding: 18px;
+    margin: 12px 0;
+  }
+  .page-markets .ticker {
+    display: none;
+  }
+  .page-markets .watch-row {
+    padding: 14px 12px;
+  }
+  .profile-page {
+    padding: 18px 12px;
+  }
+  .profile-intro h1 {
+    font-size: 23px;
+  }
+  .profile-page .google-login {
+    padding: 14px;
+  }
+  .app footer {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 16px 0;
+  }
+  .backtest-page {
+    padding: 16px 12px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}
+.page-bot .terminal-tools {
+  display: flex;
+}
+.page-bot .mobile-panels {
+  display: none;
+}
+.primary-nav > a {
+  height: auto;
+  border-bottom: 0;
+}
+.primary-nav > a > svg {
+  display: block;
+}
+.primary-nav > a > span {
+  display: block;
+}
+.toast {
+  bottom: 90px;
+  z-index: 30;
+}
+@media (max-width: 760px) {
+  .account .metric {
+    align-self: stretch;
+  }
+  .account .broker-monitor {
+    padding: 10px;
+    gap: 5px;
+  }
+  .account .broker-monitor button {
+    padding: 7px;
+    font-size: 10px;
+    min-height: 36px;
+    margin: 0;
+  }
+  .account .broker-monitor small:last-child {
+    font-size: 8px;
+    line-height: 1.3;
+  }
+  .account .broker-monitor strong {
+    margin: 0;
+  }
+  .paper-switch {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  .paper-switch > label {
+    width: auto;
+    font-size: 10px;
+  }
+  .paper-switch select {
+    flex: 1;
+    min-height: 36px;
+  }
+  .feed-warning {
+    flex-wrap: wrap;
+    font-size: 11px;
+  }
+}
+.primary-nav {
+  align-items: stretch;
+}
+.balance-details {
+  margin: 16px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #101621;
+}
+.balance-details > summary {
+  padding: 13px 16px;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  color: #9cabbe;
+  font-size: 11px;
+}
+.balance-details > summary::before {
+  content: "+";
+  color: #a8b9ef;
+  font-size: 18px;
+}
+.balance-details[open] > summary::before {
+  content: "−";
+}
+.balance-details > summary strong {
+  color: #dce6f5;
+  font-family: "IBM Plex Mono", monospace;
+}
+.balance-details .account {
+  margin: 0;
+  padding: 0 12px 12px;
+  align-items: stretch;
+}
+.page-bot .balance-details,
+.page-markets .balance-details {
+  display: none;
+}
+@media (max-width: 760px) {
+  .balance-details {
+    margin: 10px 0;
+  }
+  .balance-details > summary {
+    padding: 10px;
+    gap: 8px;
+    font-size: 10px;
+  }
+  .balance-details > summary > span:last-child {
+    display: none;
+  }
+  .chart-wrap {
+    height: 330px;
+  }
+}
+.bot-intro {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 20px;
+  margin-bottom: 24px;
+}
+.bot-intro h1 {
+  font-size: 26px;
+  margin: 10px 0;
+}
+.bot-intro p {
+  color: #9eacc4;
+}
+.bot-intro a {
+  display: inline-block;
+  color: #a7b9ff;
+  padding: 10px 0;
+}

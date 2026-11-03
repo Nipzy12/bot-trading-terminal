@@ -1,3 +1,4 @@
+import { workspacePage } from "./workspace-navigation.mjs";
 // Chromium HTTPS/same-origin cookie flow with mocked private APIs; no Exness login.
 import { chromium } from "@playwright/test";
 import { readFile } from "node:fs/promises";
@@ -125,7 +126,7 @@ try {
           return route.abort();
         }
       });
-      const page = await context.newPage(),
+      const page = await context.newPage().then(workspacePage),
         errors = [];
       page.on("pageerror", (e) => errors.push(e.message));
       await page.goto(base + "/?feed=live");

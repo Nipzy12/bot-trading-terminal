@@ -1,3 +1,4 @@
+import { workspacePage } from "./workspace-navigation.mjs";
 import { chromium } from "@playwright/test";
 import assert from "node:assert/strict";
 const browser = await chromium.launch({
@@ -8,7 +9,9 @@ const browser = await chromium.launch({
 const id = "11111111-1111-4111-8111-111111111111",
   other = "22222222-2222-4222-8222-222222222222";
 try {
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 } }),
+  const page = await browser
+      .newPage({ viewport: { width: 390, height: 844 } })
+      .then(workspacePage),
     errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   let requests = 0,
@@ -61,35 +64,31 @@ try {
         low: 3898,
         close: i === 29 ? 3899 : 3900,
       }));
-      window.marketSockets
-        .at(-1)
-        .emit({
-          type: "basis",
-          connectionId,
-          symbol: "XAUUSD",
-          interval: 3600,
-          candles,
-        });
+      window.marketSockets.at(-1).emit({
+        type: "basis",
+        connectionId,
+        symbol: "XAUUSD",
+        interval: 3600,
+        candles,
+      });
     }, connectionId);
   }
   async function tick(bid, ask, advance = 0, connectionId = id) {
     await page.evaluate(
       ({ bid, ask, advance, connectionId }) => {
         window.marketNow += advance;
-        window.marketSockets
-          .at(-1)
-          .emit({
-            type: "tick",
-            connectionId,
-            symbol: "XAUUSD",
-            time: Date.now(),
-            timestampMs: Date.now(),
-            bid,
-            ask,
-            provider: "EXNESS",
-            source: "EXNESS_LIVE",
-            freshness: "FRESH",
-          });
+        window.marketSockets.at(-1).emit({
+          type: "tick",
+          connectionId,
+          symbol: "XAUUSD",
+          time: Date.now(),
+          timestampMs: Date.now(),
+          bid,
+          ask,
+          provider: "EXNESS",
+          source: "EXNESS_LIVE",
+          freshness: "FRESH",
+        });
       },
       { bid, ask, advance, connectionId },
     );
@@ -246,7 +245,7 @@ try {
   await page.evaluate(() => (window.marketNow += 11000));
   await page
     .getByRole("status")
-    .filter({ hasText: "EXNESS LIVE · STALE" })
+    .filter({ hasText: "EXNESS LIVE · Quote kedaluwarsa" })
     .waitFor();
   assert.match(await gold.textContent(), /STALE/);
   assert.match(await page.locator(".autopilot-status").textContent(), /STALE/);
@@ -314,15 +313,13 @@ try {
   await page.locator("#paper-account").selectOption(`EXNESS_LIVE:${other}`);
   await robot().click();
   await page.evaluate(() =>
-    window.marketSockets
-      .at(-1)
-      .emit({
-        type: "status",
-        code: "RATE_LIMITED",
-        brokerErrorCode: 3015,
-        rateLimitSource: "EXNESS_WS",
-        retryAfterSec: 5,
-      }),
+    window.marketSockets.at(-1).emit({
+      type: "status",
+      code: "RATE_LIMITED",
+      brokerErrorCode: 3015,
+      rateLimitSource: "EXNESS_WS",
+      retryAfterSec: 5,
+    }),
   );
   await page.getByRole("status").filter({ hasText: "RATE_LIMITED" }).waitFor();
   await tick(9000, 9001, 1, other);

@@ -183,7 +183,8 @@ function Chart({ data }: { data: Candle[] }) {
   }, [data]);
   return <div className="chart" ref={ref} />;
 }
-function App() {
+function App({ page }: { page: string }) {
+  const [mobilePanel, setMobilePanel] = useState("chart");
   const [symbol, setSymbol] = useState<Position["symbol"]>("XAUUSD"),
     [interval, setIntervalValue] = useState("3600"),
     [fallbackData, setData] = useState<Candle[]>([]),
@@ -616,119 +617,51 @@ function App() {
     );
   }
   return (
-    <div className="app">
-      <aside className="rail">
-        <div className="brand-icon">
-          <Activity />
-        </div>
-        <button aria-label="Terminal" className="active">
-          <ChartCandlestick />
-        </button>
-        <button
-          aria-label="Ringkasan akun"
-          onClick={() => setNotice("Akun simulasi · saldo virtual $10,000.00")}
-        >
-          <LayoutDashboard />
-        </button>
-        <button
-          aria-label="Robot trading"
-          onClick={() =>
-            document
-              .getElementById("robot")
-              ?.scrollIntoView({ behavior: "smooth" })
-          }
-        >
-          <Bot />
-        </button>
-        <button
-          aria-label="Dompet"
-          onClick={() =>
-            setNotice("Dompet simulasi. Deposit dan penarikan tidak tersedia.")
-          }
-        >
-          <Wallet />
-        </button>
-        <div className="rail-bottom">
-          <ShieldCheck />
-          <button
-            aria-label="Bantuan"
-            onClick={() =>
-              setNotice(
-                "Pilih market, tentukan volume, lalu buat order simulasi. Robot SMA20 berjalan selama halaman terbuka.",
-              )
-            }
-          >
-            <CircleHelp />
-          </button>
-          <div className="avatar">NP</div>
-        </div>
-      </aside>
+    <div className={`app page-${page}`} data-mobile-panel={mobilePanel}>
       <div className="workspace">
-        <header>
-          <a className="logo" href="/">
-            NEXUS<span>TERMINAL</span>
-          </a>
-          <nav>
-            <a className="selected" href="#terminal">
-              Terminal
-            </a>
-            <a href="#markets">Markets</a>
-            <a href="/accounts">Accounts</a>
-            <a href="/backtest">Backtest</a>
-            <a href="#robot">
-              Trading bot <span className="new">NEW</span>
-            </a>
-          </nav>
-          <div className="header-right">
-            <span className="badge">
-              <i /> Paper trading
-            </span>
-            <button
-              aria-label="Notifikasi"
-              onClick={() =>
-                setNotice(
-                  "Tidak ada notifikasi baru. Semua transaksi dalam mode simulasi.",
-                )
-              }
-            >
-              <Bell size={18} />
-            </button>
-            <div className="avatar">NP</div>
-            <span className="user">
-              Nipzy <ChevronDown size={13} />
-            </span>
-          </div>
-        </header>
         {liveMode && (
           <div className="feed-warning" role="status">
-            EXNESS LIVE · {liveStatus} · Bid/Ask broker; OHLC tick teramati,
-            candle aktif parsial setelah reconnect.{" "}
+            <strong>
+              EXNESS LIVE ·{" "}
+              {market.freshness === "FRESH"
+                ? "Terhubung"
+                : market.freshness === "STALE"
+                  ? "Quote kedaluwarsa"
+                  : "Menunggu tick broker"}
+            </strong>
+            {liveCooldown > 0 && <span>Cooldown {liveCooldown} detik</span>}
             {liveAccessHint(liveStatus) && (
               <span className="live-access-hint">
                 {liveAccessHint(liveStatus)} <a href="/accounts">Accounts</a>
               </span>
             )}
-            {liveRate.rateLimitSource && (
-              <span> · {liveRate.rateLimitSource}</span>
-            )}
-            {liveCooldown > 0 && <span> · Cooldown {liveCooldown} detik</span>}
-            {liveDiagnostic && (
-              <small className="live-diagnostic">
-                phase={liveDiagnostic.phase} · upstreamOpened=
-                {String(liveDiagnostic.upstreamOpened)} · subscriptionSent=
-                {String(liveDiagnostic.subscriptionSent)} ·
-                subscriptionAckReceived=
-                {String(liveDiagnostic.subscriptionAckReceived)} ·
-                firstValidTickReceived=
-                {String(liveDiagnostic.firstValidTickReceived)}
-                {liveDiagnostic.brokerErrorCode !== undefined && (
-                  <> · brokerErrorCode={liveDiagnostic.brokerErrorCode}</>
-                )}
-                {liveDiagnostic.closeCode !== undefined && (
-                  <> · closeCode={liveDiagnostic.closeCode}</>
-                )}
-              </small>
-            )}
+            <details className="connection-details">
+              <summary>Connection Details</summary>
+              <p>
+                {liveStatus} · Bid/Ask broker; OHLC tick teramati, candle aktif
+                dapat parsial setelah reconnect.
+              </p>
+              {liveRate.rateLimitSource && (
+                <span> · {liveRate.rateLimitSource}</span>
+              )}
+              {liveDiagnostic && (
+                <small className="live-diagnostic">
+                  phase={liveDiagnostic.phase} · upstreamOpened=
+                  {String(liveDiagnostic.upstreamOpened)} · subscriptionSent=
+                  {String(liveDiagnostic.subscriptionSent)} ·
+                  subscriptionAckReceived=
+                  {String(liveDiagnostic.subscriptionAckReceived)} ·
+                  firstValidTickReceived=
+                  {String(liveDiagnostic.firstValidTickReceived)}
+                  {liveDiagnostic.brokerErrorCode !== undefined && (
+                    <> · brokerErrorCode={liveDiagnostic.brokerErrorCode}</>
+                  )}
+                  {liveDiagnostic.closeCode !== undefined && (
+                    <> · closeCode={liveDiagnostic.closeCode}</>
+                  )}
+                </small>
+              )}
+            </details>
             <button
               disabled={liveCooldown > 0}
               onClick={() => setFeedEpoch((n) => n + 1)}
@@ -751,44 +684,60 @@ function App() {
             </button>
           </div>
         )}
-        <section className="account">
-          <div>
-            <span className="eyebrow">WORKSPACE / OVERVIEW</span>
-            <h1>
-              Trading terminal
-              <span className="live-dot" />
-            </h1>
-            <p>Pasar global. Satu workspace. Kendali penuh.</p>
-          </div>
-          <div className="metric">
-            <span>
-              NEXUS PAPER · Saldo Virtual <Wallet size={13} />
-            </span>
-            <strong>${fmt(10000 + realized)}</strong>
-            <small>
-              {accountLabel} · USD · Realized ${fmt(realized)}
-            </small>
-          </div>
-          <BrokerMonitor />
-          <div className="metric">
-            <span>Posisi terbuka</span>
-            <strong>
-              {positions.length}
-              <span> posisi</span>
-            </strong>
-            <small className="green">Modal virtual, tanpa risiko dana</small>
-          </div>
-          <div className="session">
-            <Globe size={17} />
+        <details className="balance-details">
+          <summary>
+            <span>Saldo & akun</span>
+            <strong>NEXUS PAPER · ${fmt(10000 + realized)}</strong>
+            <span>Saldo broker & detail akun</span>
+          </summary>
+          <section className="account">
             <div>
-              Execution environment
-              <strong>
-                Paper trading <i />
-              </strong>
+              <span className="eyebrow">WORKSPACE / OVERVIEW</span>
+              <h1>
+                {page === "bot"
+                  ? "Trading Bot"
+                  : page === "markets"
+                    ? "Markets"
+                    : "Trading terminal"}
+              </h1>
+              <p>
+                {page === "bot"
+                  ? "AutoPilot SMA20 · sinyal pasar, eksekusi paper."
+                  : page === "markets"
+                    ? "Instrumen dan kuotasi dari feed yang Anda pilih."
+                    : "Market intelligence. Paper execution."}
+              </p>
             </div>
-            <span className="muted">{accountLabel}</span>
-          </div>
-        </section>
+            <div className="metric">
+              <span>
+                NEXUS PAPER · Saldo Virtual <Wallet size={13} />
+              </span>
+              <strong>${fmt(10000 + realized)}</strong>
+              <small>
+                {accountLabel} · USD · Realized ${fmt(realized)}
+              </small>
+            </div>
+            <BrokerMonitor />
+            <div className="metric">
+              <span>Posisi terbuka</span>
+              <strong>
+                {positions.length}
+                <span> posisi</span>
+              </strong>
+              <small className="green">Modal virtual, tanpa risiko dana</small>
+            </div>
+            <div className="session">
+              <Globe size={17} />
+              <div>
+                Execution environment
+                <strong>
+                  Paper trading <i />
+                </strong>
+              </div>
+              <span className="muted">{accountLabel}</span>
+            </div>
+          </section>
+        </details>
         <section className="paper-switch panel" aria-label="Akun paper trading">
           <label htmlFor="paper-account">Akun paper terpisah</label>
           <select
@@ -894,6 +843,29 @@ function App() {
             </button>
           ))}
         </section>
+        <div className="terminal-tools">
+          <nav className="mobile-panels" aria-label="Panel Terminal">
+            {[
+              ["chart", "Chart"],
+              ["order", "Order"],
+              ["positions", "Posisi"],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                aria-pressed={mobilePanel === value}
+                onClick={() => setMobilePanel(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+          <span className="robot-summary">
+            AutoPilot · {robot ? "Aktif · PAPER" : "Berhenti"}
+          </span>
+          <button className="emergency" onClick={emergency}>
+            Emergency stop · tutup semua
+          </button>
+        </div>
         <main id="terminal">
           <section className="chart-panel panel">
             <div className="panel-top">
@@ -1169,6 +1141,22 @@ function App() {
             <p className="disclaimer">
               Order virtual. Tidak dikirim ke broker.
             </p>
+          </aside>
+          <section
+            className="bot-panel panel"
+            aria-label="Pengaturan Trading Bot"
+          >
+            <div className="bot-intro">
+              <span className="eyebrow">SIGNAL ENGINE / PAPER EXECUTION</span>
+              <h1>Trading Bot</h1>
+              <p>
+                {symbol} · timeframe {Number(interval) / 60} menit · akun{" "}
+                {accountLabel}
+              </p>
+              <a href={"/" + location.search}>
+                Pilih instrumen & timeframe di Terminal →
+              </a>
+            </div>{" "}
             <div id="robot" className="robot">
               <div>
                 <Bot size={19} />
@@ -1235,9 +1223,7 @@ function App() {
                 {robot ? "Hentikan robot" : "Jalankan robot simulasi"}
                 <Activity size={14} />
               </button>
-              <button className="emergency" onClick={emergency}>
-                Emergency stop · tutup semua
-              </button>
+
               <small>
                 Emergency stop hanya untuk akun paper {accountLabel}.
               </small>
@@ -1252,7 +1238,7 @@ function App() {
                 </button>
               )}
             </div>
-          </aside>
+          </section>
           <section className="positions panel">
             <div className="pnl-strip">
               <div>
@@ -1467,17 +1453,121 @@ function App() {
     </div>
   );
 }
+const routes = [
+  ["/", "Terminal", ChartCandlestick],
+  ["/markets", "Markets", Globe],
+  ["/bot", "Trading Bot", Bot],
+  ["/backtest", "Backtest", Activity],
+  ["/accounts", "Profile & Accounts", Wallet],
+] as const;
+function Workspace() {
+  const [path, setPath] = useState(location.pathname);
+  useEffect(() => {
+    const pop = () => setPath(location.pathname);
+    const click = (event: MouseEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.button !== 0 ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey
+      )
+        return;
+      const anchor = (event.target as Element).closest("a");
+      if (!anchor || anchor.target || anchor.hasAttribute("download")) return;
+      const url = new URL(anchor.href);
+      if (
+        url.origin !== location.origin ||
+        url.search !== location.search ||
+        url.hash ||
+        !routes.some(([route]) => route === url.pathname)
+      )
+        return;
+      event.preventDefault();
+      history.pushState(null, "", url);
+      setPath(url.pathname);
+      window.scrollTo({ top: 0, behavior: "instant" });
+    };
+    window.addEventListener("popstate", pop);
+    document.addEventListener("click", click);
+    return () => {
+      window.removeEventListener("popstate", pop);
+      document.removeEventListener("click", click);
+    };
+  }, []);
+  const title = routes.find(([route]) => route === path)?.[1] ?? "Terminal";
+  useEffect(() => {
+    document.title = `${title} · NEXUS`;
+  }, [title]);
+  const page =
+    path === "/bot" ? "bot" : path === "/markets" ? "markets" : "terminal";
+  const privatePage = path === "/accounts" || path === "/backtest";
+  return (
+    <div className="nexus-shell">
+      <a href="#workspace-content" className="skip-link">
+        Lewati navigasi
+      </a>
+      <nav className="primary-nav" aria-label="Navigasi utama">
+        <a className="shell-brand" href={"/" + location.search}>
+          N
+          <span>
+            NEXUS<small>TRADING WORKSPACE</small>
+          </span>
+        </a>
+        {routes.map(([route, label, Icon]) => (
+          <a
+            key={route}
+            href={route + location.search}
+            aria-current={path === route ? "page" : undefined}
+          >
+            <Icon size={19} />
+            <span>{label}</span>
+          </a>
+        ))}
+        <small className="nav-foot">
+          READ-ONLY BROKER
+          <br />
+          PAPER EXECUTION
+        </small>
+      </nav>
+      <div className="shell-content" id="workspace-content">
+        <header className="shell-topbar">
+          <div>
+            <span className="eyebrow">NEXUS WORKSPACE</span>
+            <strong>{title}</strong>
+          </div>
+          <span className="badge">PAPER ONLY</span>
+          <a className="profile-link" href={"/accounts" + location.search}>
+            Profil & akun
+          </a>
+        </header>
+        <div hidden={privatePage}>
+          <App page={page} />
+        </div>
+        <React.Suspense fallback={<p role="status">Memuat workspace…</p>}>
+          {path === "/accounts" && (
+            <div className="profile-page">
+              <section className="profile-intro">
+                <span className="eyebrow">IDENTITY & CONNECTIONS</span>
+                <h1>Profile & Accounts</h1>
+                <p>
+                  Dua sesi terpisah. Login dan logout tidak menggabungkan akun
+                  Anda.
+                </p>
+              </section>
+              <GoogleLogin />
+              <AccountManagement />
+            </div>
+          )}
+          {path === "/backtest" && <Backtest />}
+        </React.Suspense>
+      </div>
+    </div>
+  );
+}
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <GoogleLogin />
-    <React.Suspense fallback={<p role="status">Memuat workspace…</p>}>
-      {location.pathname === "/accounts" ? (
-        <AccountManagement />
-      ) : location.pathname === "/backtest" ? (
-        <Backtest />
-      ) : (
-        <App />
-      )}
-    </React.Suspense>
+    <Workspace />
   </React.StrictMode>,
 );

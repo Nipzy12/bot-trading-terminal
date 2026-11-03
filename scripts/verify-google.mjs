@@ -8,7 +8,7 @@ const base = process.env.BASE_URL || "http://localhost:5173";
 try {
   for (const width of [360, 390, 412, 1440]) {
     const page = await browser.newPage({ viewport: { width, height: 1000 } });
-    await page.goto(base);
+    await page.goto(base + "/accounts");
     await page
       .getByText("Google Login belum dikonfigurasi", { exact: false })
       .waitFor();
@@ -43,7 +43,7 @@ try {
  `,
     }),
   );
-  await page.goto(base);
+  await page.goto(base + "/accounts");
   await page.getByRole("button", { name: "Login with Google" }).click();
   await page.getByText("Test User", { exact: true }).waitFor();
   await page.getByRole("button", { name: "Logout Google" }).click();
