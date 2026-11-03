@@ -49,7 +49,7 @@ import {
 } from "lucide-react";
 import "./style.css";
 const Backtest = React.lazy(() =>
-  import("./Backtest").then((m) => ({ default: m.Backtest })),
+  import("./BacktestPage").then((m) => ({ default: m.Backtest })),
 );
 const AccountManagement = React.lazy(() =>
   import("./AccountManagement").then((m) => ({ default: m.AccountManagement })),
