@@ -11,6 +11,30 @@ const bearer = /^Bearer ([A-Za-z0-9_-]{43})$/;
 const deviceLabel = "Windows laptop";
 const presenceWindowMs = 30_000;
 
+// V6.2A only: isolated, explicitly synthetic transport fixture.
+// Never feeds order execution, broker balances, the chart or EXNESS_LIVE status.
+export const relayTestSchema = z.object({
+  mode: z.literal("TEST_ONLY"),
+  symbol: z.literal("XAUUSD"),
+  bid: z.number().finite().positive().max(1000000),
+  ask: z.number().finite().positive().max(1000000),
+  at: z.iso.datetime({ offset: true }),
+}).strict();
+export function validateRelayTest(value: unknown, now = Date.now()) {
+  const result = relayTestSchema.safeParse(value);
+  if (!result.success) return null;
+  const quote = result.data;
+  const t = Date.parse(quote.at);
+  if (!Number.isFinite(t) || t < now - 10_000 || t > now + 2_000 ||
+      quote.ask < quote.bid || quote.ask - quote.bid > 100) return null;
+  return quote;
+}
+export function relayTestFresh(receivedAt: unknown, heartbeatAt: unknown, now = Date.now()) {
+  if (enginePresence(heartbeatAt, now) !== "ONLINE" || !receivedAt) return false;
+  const t = new Date(receivedAt as string).getTime();
+  return Number.isFinite(t) && t <= now && now - t <= 15_000;
+}
+
 export function engineSecretHash(kind: string, value: string, key = process.env.BETTER_AUTH_SECRET ?? "") {
   if (key.length < 32) throw Error("ENGINE_AUTH_UNAVAILABLE");
   return createHmac("sha256", key).update("nexus-engine-v1:").update(kind).update(":").update(value).digest("hex");
@@ -38,6 +62,24 @@ export function ownerEngineRouter() {
         ? { status: enginePresence(row.last_seen_at), label: row.label,
             pairedAt: row.paired_at, lastSeenAt: row.last_seen_at }
         : { status: "UNPAIRED", label: null, pairedAt: null, lastSeenAt: null });
+    } catch {
+      res.status(503).json({ error: "ENGINE_SERVICE_UNAVAILABLE" });
+    }
+  });
+  router.get("/relay-test", async (_req, res) => {
+    try {
+      const owner = (res.locals.identity as Identity).user.id;
+      const result = await database().query(
+        "SELECT q.symbol,q.bid,q.ask,q.quote_at,q.received_at,d.last_seen_at FROM nexus_private.nexus_engine_test_quotes q JOIN nexus_private.nexus_engine_devices d ON d.user_id=q.user_id WHERE q.user_id=$1",
+        [owner],
+      );
+      const row = result.rows[0];
+      if (!row || !relayTestFresh(row.received_at, row.last_seen_at)) {
+        res.json({ source: "TEST_ONLY", fresh: false, symbol: null, bid: null, ask: null });
+        return;
+      }
+      res.json({ source: "TEST_ONLY", fresh: true, symbol: row.symbol,
+        bid: Number(row.bid), ask: Number(row.ask), sampledAt: row.quote_at });
     } catch {
       res.status(503).json({ error: "ENGINE_SERVICE_UNAVAILABLE" });
     }
@@ -97,6 +139,38 @@ export function deviceEngineRouter() {
       if (result.rows.length !== 1) { res.status(403).json({ error: "PAIR_CODE_EXPIRED_OR_USED" }); return; }
       // Device token is returned once and kept only in process memory by the Windows CLI.
       res.set("Cache-Control", "no-store").json({ paired: true, token, heartbeatSeconds: 10 });
+    } catch {
+      res.status(503).json({ error: "ENGINE_SERVICE_UNAVAILABLE" });
+    }
+  });
+  router.post("/relay-test", async (req, res) => {
+    const token = bearer.exec(req.get("authorization") ?? "");
+    if (!token) { res.status(401).json({ error: "ENGINE_UNAUTHORIZED" }); return; }
+    const quote = validateRelayTest(req.body);
+    if (!quote) { res.status(400).json({ error: "INVALID_TEST_QUOTE" }); return; }
+    try {
+      const db = database();
+      const hash = engineSecretHash("device", token[1]);
+      const device = await db.query(
+        "SELECT user_id FROM nexus_private.nexus_engine_devices WHERE token_hash=$1 AND last_seen_at > clock_timestamp()-interval '30 seconds'",
+        [hash],
+      );
+      if (!device.rows.length) { res.status(401).json({ error: "ENGINE_UNAUTHORIZED" }); return; }
+      const owner = device.rows[0].user_id as string;
+      if (!(await takeRate(db, "engine-test-relay:" + owner, 8, 60))) {
+        res.status(429).json({ error: "RATE_LIMITED" }); return;
+      }
+      const stored = await db.query(
+        `INSERT INTO nexus_private.nexus_engine_test_quotes(user_id,symbol,bid,ask,quote_at,received_at)
+         SELECT user_id,$2,$3,$4,$5,clock_timestamp() FROM nexus_private.nexus_engine_devices
+         WHERE token_hash=$1 AND last_seen_at>clock_timestamp()-interval '30 seconds'
+         ON CONFLICT(user_id) DO UPDATE SET symbol=EXCLUDED.symbol,bid=EXCLUDED.bid,ask=EXCLUDED.ask,
+           quote_at=EXCLUDED.quote_at,received_at=EXCLUDED.received_at
+         WHERE nexus_engine_test_quotes.quote_at<EXCLUDED.quote_at RETURNING user_id`,
+        [hash, quote.symbol, quote.bid, quote.ask, quote.at],
+      );
+      if (!stored.rows.length) { res.status(409).json({ error: "RELAY_REJECTED" }); return; }
+      res.json({ accepted: true, source: "TEST_ONLY", brokerVerified: false });
     } catch {
       res.status(503).json({ error: "ENGINE_SERVICE_UNAVAILABLE" });
     }

@@ -25,7 +25,8 @@ try {
     ),
   );
   await db.query(await readFile(new URL("../migrations/002_engine.sql", import.meta.url), "utf8"));
-  console.log("NEXUS account and Windows engine schema ready");
+  await db.query(await readFile(new URL("../migrations/003_engine_relay.sql", import.meta.url), "utf8"));
+  console.log("NEXUS account, Windows engine and isolated test relay schemas ready");
 } catch {
   console.error(
     "Migration failed; verify database connectivity and schema permissions.",

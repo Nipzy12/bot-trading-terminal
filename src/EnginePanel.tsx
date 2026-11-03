@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 
+type RelayTestStatus = {
+  source: "TEST_ONLY"; fresh: boolean; symbol: string | null;
+  bid: number | null; ask: number | null; sampledAt?: string;
+};
 type EngineStatus = {
   status: "ONLINE" | "OFFLINE" | "UNPAIRED";
   label: string | null;
@@ -7,6 +11,7 @@ type EngineStatus = {
 };
 export function EnginePanel({ csrfToken }: { csrfToken: string }) {
   const [state, setState] = useState<EngineStatus | null>(null);
+  const [relay, setRelay] = useState<RelayTestStatus | null>(null);
   const [code, setCode] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -21,6 +26,8 @@ export function EnginePanel({ csrfToken }: { csrfToken: string }) {
       try {
         const r = await fetch("/api/account/engine/status", { credentials: "same-origin", cache: "no-store" });
         if (r.ok && active) setState(await r.json());
+        const q = await fetch("/api/account/engine/relay-test", { credentials: "same-origin", cache: "no-store" });
+        if (active) setRelay(q.ok ? await q.json() : null);
       } catch { /* Offline can be displayed on next poll. */ }
     }
     void check();
@@ -63,7 +70,13 @@ export function EnginePanel({ csrfToken }: { csrfToken: string }) {
       </div>
       {code && <p>Kode sekali pakai: <code style={{ userSelect: "all", fontWeight: 700, overflowWrap: "anywhere" }}>{code}</code></p>}
       {message && <p role="status">{message}</p>}
-      <p>Jalankan <code>node engine/index.mjs</code> di laptop Windows setelah V6.1 terpasang di website.</p>
+      <p>Mode default laptop tetap heartbeat saja: <code>node engine/index.mjs</code>.</p>
+      <p><strong>Uji relay V6.2A (opsional):</strong> hentikan engine lama dengan Ctrl+C, lalu mulai ulang dengan <code>node engine/index.mjs --relay-test</code> dan kode pairing baru.</p>
+      <p role="status">Relay laptop: <strong>{relay?.fresh ? "TEST ONLY · FRESH" : "BELUM ADA DATA UJI / STALE"}</strong></p>
+      {relay?.fresh && relay.symbol && relay.bid !== null && relay.ask !== null && (
+        <p>{relay.symbol} · Bid {relay.bid.toFixed(2)} · Ask {relay.ask.toFixed(2)} · <strong>SIMULASI, BUKAN EXNESS</strong></p>
+      )}
+      <p>Relay TEST_ONLY tidak mengubah chart, saldo, P&L, harga order, atau robot. Untuk data Exness sebenarnya diperlukan autentikasi broker khusus di laptop pada tahap berikutnya.</p>
     </section>
   );
 }

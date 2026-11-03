@@ -4,6 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
 
 const origin = "https://bot-trading-terminal.vercel.app";
+const relayTest = process.argv.includes("--relay-test");
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let stopped = false;
 process.on("SIGINT", () => { stopped = true; console.log("\nNEXUS Engine dihentikan."); });
@@ -25,7 +26,8 @@ async function send(path, body, token) {
   }
   return result;
 }
-console.log("NEXUS Engine V6.1 · WINDOWS · HEARTBEAT ONLY");
+console.log(relayTest ? "NEXUS Engine V6.2A · RELAY TEST ONLY" : "NEXUS Engine V6.1 · HEARTBEAT ONLY");
+if (relayTest) console.log("Data XAUUSD adalah FIXTURE SIMULASI, bukan Exness. Tidak dipakai untuk trading.");
 console.log("Semua broker order dinonaktifkan; tidak ada Exness API key di laptop.");
 console.log("Buka https://bot-trading-terminal.vercel.app/accounts di browser, login Sesi NEXUS, lalu buat kode pairing.");
 const io = createInterface({ input: stdin, output: stdout });
@@ -47,6 +49,21 @@ if (!/^[A-Za-z0-9_-]{32}$/.test(code)) {
         await send("/api/engine/heartbeat", {}, token);
         if (failures) console.log("Koneksi pulih.");
         failures = 0;
+        if (relayTest) {
+          try {
+            await send("/api/engine/relay-test", {
+              mode: "TEST_ONLY", symbol: "XAUUSD", bid: 2742.68, ask: 2742.92,
+              at: new Date().toISOString(),
+            }, token);
+            console.log("Relay uji diterima · sumber TEST_ONLY (bukan Exness).");
+          } catch (error) {
+            console.error("Relay uji ditolak (" + (error.status ?? "NETWORK") + "). Tidak memengaruhi heartbeat.");
+            if ([401, 403, 429].includes(error.status)) {
+              console.error("Relay dibatasi; hentikan mode uji.");
+              break;
+            }
+          }
+        }
         console.log("NEXUS Engine ONLINE · " + new Date().toLocaleTimeString("id-ID"));
       } catch (error) {
         failures++;
