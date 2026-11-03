@@ -25,7 +25,11 @@
     "test:live:session:browser": "node scripts/verify-live-session.mjs",
     "test:live:market:browser": "node scripts/verify-live-market.mjs",
     "test:google:browser": "node scripts/verify-google.mjs",
-    "test:workspace:browser": "node scripts/verify-workspace.mjs"
+    "test:workspace:browser": "node scripts/verify-workspace.mjs",
+    "engine:local:setup": "tsx engine/local-exness.ts setup",
+    "engine:local:status": "tsx engine/local-exness.ts status",
+    "engine:local:probe": "tsx engine/local-exness.ts probe",
+    "engine:local:forget": "tsx engine/local-exness.ts forget"
   },
   "repository": {
     "type": "git",
