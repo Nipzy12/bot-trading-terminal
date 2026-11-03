@@ -1825,3 +1825,42 @@ main {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+.google-login {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 18px;
+  background: #101722;
+  color: #dce5f3;
+  border-bottom: 1px solid #293347;
+  font-size: 13px;
+}
+.google-login > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 220px;
+  overflow-wrap: anywhere;
+}
+.google-login button {
+  padding: 10px 14px;
+  border: 1px solid #596b88;
+  border-radius: 6px;
+  background: #1d3049;
+  color: #fff;
+  min-height: 44px;
+}
+.google-login button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.google-login p,
+.google-login small {
+  margin: 0;
+  flex-basis: 100%;
+  overflow-wrap: anywhere;
+  color: #aebed3;
+}

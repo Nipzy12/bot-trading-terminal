@@ -23,7 +23,8 @@
     "test:live:csp": "node scripts/verify-live-csp.mjs",
     "test:monitor:browser": "node scripts/verify-monitor.mjs",
     "test:live:session:browser": "node scripts/verify-live-session.mjs",
-    "test:live:market:browser": "node scripts/verify-live-market.mjs"
+    "test:live:market:browser": "node scripts/verify-live-market.mjs",
+    "test:google:browser": "node scripts/verify-google.mjs"
   },
   "repository": {
     "type": "git",
@@ -40,6 +41,7 @@
   "dependencies": {
     "better-auth": "1.7.15",
     "express": "^5.3.0",
+    "firebase": "^13.2.0",
     "ipaddr.js": "2.5.0",
     "kysely": "0.29.8",
     "lightweight-charts": "^5.2.1",

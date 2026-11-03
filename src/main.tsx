@@ -1,3 +1,4 @@
+import { GoogleLogin } from "./GoogleLogin";
 import { BrokerMonitor } from "./BrokerMonitor";
 import {
   liveAccessHint,
@@ -1468,6 +1469,7 @@ function App() {
 }
 createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
+    <GoogleLogin />
     <React.Suspense fallback={<p role="status">Memuat workspace…</p>}>
       {location.pathname === "/accounts" ? (
         <AccountManagement />

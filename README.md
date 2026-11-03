@@ -320,3 +320,43 @@ The new-entry cap is three paper positions per account, including manual entries
 UI separates MARKET DATA: EXNESS LIVE, SIGNAL ENGINE: AUTOPILOT, EXECUTION MODE: PAPER, BROKER BALANCE: EXNESS DEMO (account type remains owner-verified), and PAPER BALANCE: NEXUS VIRTUAL. No LIVE TRADING label, broker order endpoint, transfer, withdrawal, API scope or credential-storage change is introduced. Account-change events invalidate the local feed; disposed/preflight generations and late frames cannot repopulate another context. Provider 429 is terminal for that attempt and never auto-retried. Pending preflights are canceled on cleanup, and Strict Mode's discarded effect does not start a duplicate preflight.
 
 Verification: run `npm test`, `npm run build`, and every test:*:browser / test:live:csp script. `test:live:market:browser` covers one-stream fan-out, watchlist/ticker truthfulness, closed SMA crossover, no duplicate paper entries, Bid/Ask fills/realized and floating P&L, max-three/emergency/stale, account changes and 429 at 360/390/412px. New financial/store tests and these browser tick fixtures are mocks. The owner previously reported real XAUUSD ticks; this implementation does not independently verify a new broker tick or any other live symbol. No trading strategy is presented as profitable.
+
+### Google Login (Firebase Web SDK)
+
+The public DEMO terminal now includes a Google profile panel: loading, login,
+profile name/email and Logout Google. This additive profile session does **not**
+authorize the existing Better Auth Exness backend or link accounts by email.
+Existing `/accounts` access continues to require its owner-authenticated server
+session. No new Exness credential storage or Firebase-to-broker authorization is
+implemented. Before a future Firebase Connect Exness flow, verify Firebase ID
+tokens server-side and establish explicit ownership; never trust client state.
+
+From Android or desktop, open Firebase Console → project → Authentication →
+Sign-in method → enable Google and choose the support email. Register a Web app
+and copy its **public Web configuration** into Vercel → project → Settings →
+Environment Variables (Production, and Preview if desired):
+`VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`,
+`VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID`. Use the project's
+`PROJECT.firebaseapp.com` authDomain. Add `bot-trading-terminal.vercel.app`
+to Authentication → Settings → Authorized domains, then redeploy (Vite reads
+these at build time). Add localhost explicitly for local testing.
+
+Firebase Web API configuration is public and bundled by design; it is not an
+Admin key. Never put service-account JSON/private keys, Exness credentials or
+backend secrets in any `VITE_*` variable. No Firebase Admin SDK is used.
+Missing/incomplete config disables Google Login with a visible message while
+DEMO remains available. SDK initialization errors have sanitized messages.
+
+Click Login with Google in Chrome/desktop, complete the popup, verify the profile,
+reload to verify the SDK's persisted session, then Logout Google. Android uses
+an explicit user-initiated popup as well; allow popups or use the primary browser
+if an embedded browser blocks OAuth. No automatic redirect/popup retry is used.
+Logout Google affects the Firebase profile session only; the existing Exness
+account session has its own logout. Firebase's SDK manages browser auth state;
+application code does not log or manually store tokens. CSP permits Firebase
+hosted auth frames, Google's auth script, and the two Firebase Auth API origins;
+existing broker WS restrictions remain intact.
+
+`npm run test:google:browser` verifies missing-config DEMO at 360/390/412/1440px
+and mocked profile/login/logout. OAuth with a real Google account still requires
+owner verification after Firebase setup; mocks do not prove production OAuth.

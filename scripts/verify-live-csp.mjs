@@ -11,7 +11,7 @@ const policy = config.routes[0].headers["Content-Security-Policy"],
   connect = policy.split(";").find((s) => s.trim().startsWith("connect-src"));
 assert.equal(
   connect.trim(),
-  "connect-src 'self' wss://bot-trading-terminal.vercel.app",
+  "connect-src 'self' wss://bot-trading-terminal.vercel.app https://identitytoolkit.googleapis.com https://securetoken.googleapis.com https://*.firebaseapp.com",
 );
 assert.equal(config.routes[1].dest, "/api/live.ts");
 let address = "",
