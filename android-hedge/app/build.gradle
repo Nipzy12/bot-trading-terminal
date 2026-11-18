@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 android {
  namespace 'com.lumavun.hedge'
  compileSdk 35
- defaultConfig { applicationId 'com.lumavun.hedge'; minSdk 26; targetSdk 35; versionCode 6; versionName '0.4.2' }
+ defaultConfig { applicationId 'com.lumavun.hedge'; minSdk 26; targetSdk 35; versionCode 7; versionName '0.4.3' }
  buildTypes { debug { applicationIdSuffix '.debug'; versionNameSuffix '-debug' } }
 }
 
