@@ -30,26 +30,12 @@ public class MainActivity extends Activity {
  private LinearLayout root, shell, body, nav;
  private ScrollView pageScroll;
  private int renderedTab=-1;
- private TextView botLiveText, botLogText, botStateText;
- private boolean paperHistory=true;
- private int persistedClosed=-1,persistedOpen=-1;
- private long persistedLastClose=-1;
- private TextView paperSummaryText,botSymbolText,botFeeText;
- private String persistedOwner="";
+ private TextView botLiveText,botLogText,botStateText,botSymbolText,brokerSummaryText,historyLiveText;
+ private LiveBroker live;
  private ExnessClient client;
- private PaperHedge paper;
- private boolean botStarting=false;
- private int botGeneration=0;
- private okhttp3.WebSocket ticks;
- private final okhttp3.OkHttpClient socketClient=new okhttp3.OkHttpClient.Builder().followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(false).pingInterval(15,java.util.concurrent.TimeUnit.SECONDS).build();
- private String botStatus="STOPPED",paperSymbol="",paperFeeDescription="Belum diperiksa";
- private boolean paperFeeKnown=false;
- private String preferredSymbol="";
- private long lastBotPaint=0, botStartTime=0;
+ private String botStatus="STOPPED",preferredSymbol="",liveSymbol="",lastLiveReason="";
  private final java.util.ArrayDeque<String> botLogs=new java.util.ArrayDeque<>();
- private final Runnable watchdog=new Runnable(){public void run(){
-  if(ticks!=null||botStarting){long now=System.currentTimeMillis();if(now-botStartTime>15000&&(paper==null||!paper.fresh(now))){stopBot("STALE / NO FRESH TICK",true);return;}handler.postDelayed(this,1000);}
- }};
+ private long lastPaint=0;
  private ExnessClient.Vault vault;
  private JSONArray positions=new JSONArray(), deals=new JSONArray();
  private String historyStatus="Belum dimuat";
@@ -82,7 +68,7 @@ public class MainActivity extends Activity {
   vault=new ExnessClient.Vault(this);try{JSONObject saved=vault.load();if(saved!=null){client=new ExnessClient(saved);status="API tersimpan. Refresh untuk membaca akun.";}}catch(Exception e){status="Kunci lokal tidak dapat dibuka. Sambungkan ulang.";}
   root=column();root.setBackgroundColor(BG);
   root.setOnApplyWindowInsetsListener((v,i)->{v.setPadding(i.getSystemWindowInsetLeft(),i.getSystemWindowInsetTop(),i.getSystemWindowInsetRight(),i.getSystemWindowInsetBottom());return i;});
-  setContentView(root);restorePaper();showShell();
+  setContentView(root);preview=false;prefs.edit().putBoolean("preview",false).apply();showShell();
  }
  private int dp(float n){return Math.round(n*getResources().getDisplayMetrics().density);}
  private LinearLayout column(){LinearLayout l=new LinearLayout(this);l.setOrientation(LinearLayout.VERTICAL);return l;}
@@ -99,10 +85,10 @@ public class MainActivity extends Activity {
  private void labelValue(LinearLayout parent,String label,String value,int color){LinearLayout r=row();TextView a=txt(label,13,MUTED,false);r.addView(a,new LinearLayout.LayoutParams(0,-2,1));TextView b=txt(value,14,color,true);b.setGravity(Gravity.END);r.addView(b,new LinearLayout.LayoutParams(0,-2,1));add(parent,r);gap(parent,8);}
  private void showShell(){
   final int oldY=pageScroll!=null&&renderedTab==tab?pageScroll.getScrollY():0;
-  renderedTab=tab;botLiveText=null;botLogText=null;botStateText=null;paperSummaryText=null;botSymbolText=null;botFeeText=null;
+  renderedTab=tab;botLiveText=null;botLogText=null;botStateText=null;brokerSummaryText=null;historyLiveText=null;botSymbolText=null;
   root.removeAllViews();shell=column();shell.setBackgroundColor(BG);root.addView(shell,new LinearLayout.LayoutParams(-1,-1));
   LinearLayout header=row();header.setPadding(dp(17),dp(12),dp(17),dp(10));
-  LinearLayout mark=column();TextView name=txt("◈  LUMAVUN  HEDGE",20,WHITE,true);add(mark,name);add(mark,txt("DIRECT API  /  v0.4.3",11,TEAL,true));header.addView(mark,new LinearLayout.LayoutParams(0,-2,1));
+  LinearLayout mark=column();TextView name=txt("◈  LUMAVUN  HEDGE",20,WHITE,true);add(mark,name);add(mark,txt("DIRECT API  /  v0.5.0",11,TEAL,true));header.addView(mark,new LinearLayout.LayoutParams(0,-2,1));
   TextView mode=txt(preview?"PREVIEW":snapshot!=null?"SNAPSHOT":client==null?"OFFLINE":"API SAVED",11,preview?PURPLE:TEAL,true);mode.setPadding(dp(10),dp(7),dp(10),dp(7));mode.setBackground(bg(PANEL,BORDER,10));header.addView(mode);add(shell,header);
   ScrollView scroll=new ScrollView(this);pageScroll=scroll;scroll.setFillViewport(true);body=column();body.setPadding(dp(16),dp(6),dp(16),dp(18));scroll.addView(body,new ScrollView.LayoutParams(-1,-2));shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
   nav=row();nav.setPadding(dp(3),dp(4),dp(3),dp(5));nav.setBackground(bg(0xff101c29,BORDER,0));
@@ -116,198 +102,93 @@ public class MainActivity extends Activity {
  private String val(String example,BigDecimal value){return preview?example:value==null?"—":amount(value);}
  private int pnlColor(BigDecimal p){return p==null?MUTED:p.signum()<0?RED:TEAL;}
  private BigDecimal floating(){return snapshot==null?null:snapshot.equity.subtract(snapshot.balance);}
+ private String money(BigDecimal v){return v==null?"—":amount(v)+(snapshot==null?"":" "+snapshot.currency);}
+ private boolean active(){return live!=null&&live.active;}
  private void home(){
-  TextView page=txt("Account overview",24,WHITE,true);add(body,page);gap(body,13);
+  add(body,txt("Account overview",24,WHITE,true));gap(body,13);
   LinearLayout hero=column();GradientDrawable gradient=new GradientDrawable(GradientDrawable.Orientation.TL_BR,new int[]{0xff123e45,0xff182637,0xff302347});gradient.setCornerRadius(dp(18));gradient.setStroke(dp(1),0xff518b9c);hero.setBackground(gradient);hero.setPadding(dp(17),dp(16),dp(17),dp(14));add(body,hero);
-  line(hero,preview?"Contoh total balance":"Saldo broker • read-only");
-  add(hero,txt(val("128.50",snapshot==null?null:snapshot.balance),34,WHITE,true));
-  add(hero,txt(preview?"USD • contoh data":snapshot==null?"Currency belum tersedia":snapshot.currency+" • snapshot",13,TEAL,true));gap(hero,12);
-  LinearLayout buttons=row();weighted(buttons,action(busy?"Memuat…":"Refresh saldo",true,()->refresh()),false);weighted(buttons,action("Akun Exness",false,()->connectDialog()),true);add(hero,buttons);gap(hero,9);line(hero,preview?"Mode contoh aktif.":statusText());
-  heading("Account metrics");
-  LinearLayout r=row();metric(r,"Equity",val("116.20",snapshot==null?null:snapshot.equity),WHITE,false);metric(r,"Floating PnL*",val("−12.30",floating()),preview?RED:pnlColor(floating()),true);add(body,r);gap(body,10);
-  LinearLayout r2=row();metric(r2,"Used margin",val("8.00",snapshot==null?null:snapshot.margin),WHITE,false);metric(r2,"Account type",preview?"Contoh":"Belum diverifikasi",MUTED,true);add(body,r2);gap(body,8);line(body,"*Equity − balance adalah selisih snapshot, bukan rincian PnL trade.");
-  heading("Market pulse");
-  LinearLayout market=card(body);labelValue(market,"XAUUSD / Gold","Exness feed",TEAL);line(market,"Market stream belum aktif. Snapshot posisi berasal dari Exness langsung.");gap(market,9);for(int i=0;i<positions.length();i++){JSONObject p=positions.optJSONObject(i);if(p!=null)labelValue(market,p.optString("instrument")+" "+p.optString("direction"),p.optString("volume")+" lot",WHITE);}
-  if(!preview&&paper!=null){heading("Paper wallet • virtual");LinearLayout pv=card(body);paperSummaryText=txt("",15,WHITE,true);add(pv,paperSummaryText);updateBotViews();line(pv,"Tidak mengubah saldo Exness.");}
-  heading("Hedge engine");
-  LinearLayout engine=card(body);labelValue(engine,"Execution","PAPER / "+botStatus,TEAL);line(engine,"Bot berjalan dengan tick Exness; order virtual terpisah dari transaksi akun.");gap(engine,8);add(engine,action("Buka kontrol bot",false,()->{tab=2;showShell();}));
+  add(hero,txt("EXNESS BROKER ACCOUNT",13,TEAL,true));brokerSummaryText=txt("",20,WHITE,true);add(hero,brokerSummaryText);gap(hero,12);
+  LinearLayout buttons=row();weighted(buttons,action("Refresh saldo",true,()->refresh()),false);weighted(buttons,action("Akun Exness",false,()->connectDialog()),true);add(hero,buttons);
+  heading("Hedge engine");LinearLayout engine=card(body);line(engine,"Eksekusi langsung melalui Exness API. Saldo hanya dari broker.");add(engine,action("Buka kontrol bot",false,()->{tab=2;showShell();}));updateLiveViews();
  }
- private String statusText(){if(snapshot!=null&&System.currentTimeMillis()-snapshot.time>30000)return "Snapshot kedaluwarsa • refresh kembali.";return status;}
- private void metric(LinearLayout r,String label,String value,int color,boolean right){LinearLayout c=column();c.setBackground(bg(PANEL,BORDER,13));c.setPadding(dp(12),dp(12),dp(12),dp(12));add(c,txt(label,12,MUTED,false));gap(c,7);add(c,txt(value,value.length()>15?14:21,color,true));weighted(r,c,right);}
+ private String statusText(){return status;}
  private void dashboard(){
-  add(body,txt("Analytics & Dashboard",25,WHITE,true));gap(body,13);
-  LinearLayout chart=card(body);add(chart,txt(preview?"Contoh grafik equity & balance (ilustrasi terpisah)":"Equity & balance history",16,WHITE,true));gap(chart,8);
-  ChartView graph=new ChartView(preview,false);graph.setContentDescription(preview?"Contoh grafik equity dan balance, bukan data broker":"Riwayat equity belum tersedia");chart.addView(graph,new LinearLayout.LayoutParams(-1,dp(180)));
-  line(chart,preview?"Teal: equity  •  Ungu: balance (contoh)":"Grafik historis equity belum tersedia. Close deal dapat dibaca di History.");
-  LinearLayout r=row();metric(r,"Win rate",preview?"66.7%":"—",TEAL,false);metric(r,"Realized PnL",preview?"+1.45":"—",TEAL,true);add(body,r);gap(body,10);
-  LinearLayout dist=card(body);add(dist,txt("Trade distribution",16,WHITE,true));ChartView donut=new ChartView(preview,true);donut.setContentDescription(preview?"Contoh distribusi, empat profit dan dua loss":"Distribusi belum tersedia");dist.addView(donut,new LinearLayout.LayoutParams(-1,dp(150)));line(dist,preview?"Contoh: 4 profit • 2 loss":"Distribusi lengkap belum dihitung. Close deal tersedia di History.");
-  if(!preview&&paper!=null){LinearLayout pv=card(body);add(pv,txt("Paper performance • virtual USD",16,WHITE,true));gap(pv,8);paperSummaryText=txt("",15,WHITE,true);add(pv,paperSummaryText);updateBotViews();add(pv,action("Buka history paper",false,()->{paperHistory=true;tab=3;showShell();}));}
-  LinearLayout current=card(body);add(current,txt("Broker snapshot",16,WHITE,true));gap(current,8);labelValue(current,"Balance",val("128.50",snapshot==null?null:snapshot.balance),WHITE);labelValue(current,"Equity",val("116.20",snapshot==null?null:snapshot.equity),TEAL);add(current,action("Refresh saldo",false,()->refresh()));
+  add(body,txt("Analytics & Dashboard",25,WHITE,true));gap(body,13);LinearLayout current=card(body);add(current,txt("Broker account • data asli",17,TEAL,true));brokerSummaryText=txt("",16,WHITE,true);add(current,brokerSummaryText);gap(current,8);add(current,action("Refresh saldo",false,()->refresh()));
+  LinearLayout trade=card(body);add(trade,txt("Realized trading results",17,WHITE,true));historyLiveText=txt("",14,WHITE,false);add(trade,historyLiveText);gap(trade,8);add(trade,action("Buka history broker",false,()->{tab=3;showShell();}));updateLiveViews();
  }
  private void bot(){
-  add(body,txt("Hedge Engine Control",25,WHITE,true));gap(body,13);
-  LinearLayout c=card(body);botStateText=txt("",17,TEAL,true);add(c,botStateText);
-  line(c,"PAPER EXECUTION • tick Exness. Order riil belum diaktifkan.");
-  gap(c,10);LinearLayout controls=row();weighted(controls,action("START BOT",true,()->startBot()),false);weighted(controls,action("STOP BOT",false,()->stopBot("STOPPED",false)),true);add(c,controls);
-  gap(c,8);add(c,action("EMERGENCY CLOSE ALL (PAPER)",false,()->emergencyPaper()));
-  LinearLayout p=card(body);add(p,txt("Active strategy",17,WHITE,true));gap(p,12);labelValue(p,"Strategy","Adaptive hedge • EMA tick 9/21",TEAL);botSymbolText=txt("",14,WHITE,true);add(p,botSymbolText);gap(p,6);add(p,action("Pilih simbol XAUUSD",false,()->selectSymbol()));labelValue(p,"Volume","0.01 lot",WHITE);labelValue(p,"Profit target",paper!=null&&!paperFeeKnown?"$1 gross / posisi":"$1 / posisi (estimasi)",TEAL);botFeeText=txt("",13,MUTED,false);add(p,botFeeText);labelValue(p,"Entry cooldown","30 detik",WHITE);labelValue(p,"Position cap","5",WHITE);labelValue(p,"Drawdown guard","15%",RED);line(p,"Modal virtual $100; margin asumsi $5/posisi; biaya hanya jika model tersedia. Tidak termasuk swap, slippage atau stop-out broker.");line(p,"Engine hanya saat APK aktif; Stop membekukan entry dan close otomatis. Riwayat dan saldo virtual disimpan lokal. Tidak ada order Exness.");
-  LinearLayout v=card(body);add(v,txt("Paper trading • saldo virtual USD",17,WHITE,true));gap(v,8);
-  botLiveText=txt("",14,WHITE,false);add(v,botLiveText);
-  LinearLayout logs=card(body);add(logs,txt("Engine logs",16,WHITE,true));gap(logs,8);
-  botLogText=txt("",13,MUTED,false);botLogText.setTextIsSelectable(true);botLogText.setFocusableInTouchMode(false);add(logs,botLogText);
-  updateBotViews();
+  add(body,txt("Live Hedge Engine",25,WHITE,true));gap(body,13);
+  LinearLayout c=card(body);botStateText=txt("",17,TEAL,true);add(c,botStateText);line(c,"LIVE • order broker sungguhan. Posisi bisa rugi dan terkena stop-out.");
+  gap(c,10);LinearLayout controls=row();weighted(controls,action("START BOT",true,()->startBot()),false);weighted(controls,action("STOP BOT",false,()->stopBot("STOPPED • posisi tetap terbuka")),true);add(c,controls);gap(c,8);add(c,action("EMERGENCY CLOSE BOT POSITIONS",false,()->emergencyLive()));
+  LinearLayout p=card(body);add(p,txt("Active strategy",17,WHITE,true));gap(p,8);botSymbolText=txt("",14,WHITE,true);add(p,botSymbolText);add(p,action("Pilih simbol XAUUSD",false,()->selectSymbol()));gap(p,8);labelValue(p,"Strategy","EMA tick 9/21 • hedge",TEAL);labelValue(p,"Volume","0.01 lot",WHITE);labelValue(p,"Profit target","$1 gross / posisi",TEAL);labelValue(p,"Position cap","5",WHITE);labelValue(p,"Drawdown guard","15%",RED);labelValue(p,"Entry cooldown","≥30s • kuota API",WHITE);line(p,"Margin konservatif; posisi minus ditahan sampai recovery atau emergency. Stop/aplikasi di background menghentikan bot, bukan menutup posisi.");
+  LinearLayout v=card(body);add(v,txt("Exness account & positions",17,WHITE,true));botLiveText=txt("",14,WHITE,false);add(v,botLiveText);
+  LinearLayout logs=card(body);add(logs,txt("Engine logs",16,WHITE,true));gap(logs,8);botLogText=txt("",13,MUTED,false);botLogText.setTextIsSelectable(true);botLogText.setFocusableInTouchMode(false);add(logs,botLogText);updateLiveViews();
  }
- private String usd(double value){return String.format(Locale.US,"$%.2f",value);}
- private void updateBotViews(){
+ private void logBot(String message){if(message==null||message.isEmpty())return;if(botLogs.size()>=100)botLogs.removeFirst();botLogs.addLast(new java.text.SimpleDateFormat("HH:mm:ss",Locale.US).format(new java.util.Date())+"  "+message);}
+ private String brokerSummary(){
+  if(snapshot==null||System.currentTimeMillis()-snapshot.time>30000)return "Balance: —\nEquity: —\nFloating PnL: —\nData broker belum tersedia atau kedaluwarsa.";
+  return "Balance: "+money(snapshot.balance)+"\nEquity: "+money(snapshot.equity)+"\nFloating PnL: "+money(snapshot.equity.subtract(snapshot.balance))+"\nUsed margin: "+money(snapshot.margin)+"\nOpen positions: "+positions.length();
+ }
+ private String historySummary(){
+  java.util.Map<String,BigDecimal[]> sum=new java.util.LinkedHashMap<>();
+  for(int i=0;i<deals.length();i++){JSONObject item=deals.optJSONObject(i),d=item==null?null:item.optJSONObject("deal"),p=d==null?null:d.optJSONObject("profit");if(p==null||!"close".equals(d.optString("type")))continue;try{String cur=p.getString("currency");BigDecimal n=new BigDecimal(p.getString("amount"));BigDecimal[] a=sum.get(cur);if(a==null){a=new BigDecimal[]{BigDecimal.ZERO,BigDecimal.ZERO,BigDecimal.ZERO};sum.put(cur,a);}a[0]=a[0].add(n);if(n.signum()>0)a[1]=a[1].add(n);else a[2]=a[2].add(n);}catch(Exception ignored){}}
+  StringBuilder b=new StringBuilder(historyStatus+"\n");for(java.util.Map.Entry<String,BigDecimal[]> a:sum.entrySet()){BigDecimal[] v=a.getValue();b.append("Profit: "+amount(v[1])+" "+a.getKey()+"\nLoss: "+amount(v[2])+" "+a.getKey()+"\nClose PnL: "+amount(v[0])+" "+a.getKey()+"\n");}
+  b.append("Jumlah dari close deal yang dimuat; net setelah seluruh biaya belum direkonsiliasi.");return b.toString();
+ }
+ private void updateLiveViews(){
   if(botStateText!=null)botStateText.setText("ENGINE • "+botStatus);
-  if(botSymbolText!=null)botSymbolText.setText("Instrument: "+(paperSymbol.isEmpty()?(preferredSymbol.isEmpty()?"XAUUSD / auto suffix":preferredSymbol):paperSymbol));
-  if(botFeeText!=null)botFeeText.setText("Komisi: "+paperFeeDescription);
-  if(paperSummaryText!=null&&paper!=null)paperSummaryText.setText("Balance virtual: "+usd(paper.balance)+"\nRealized PnL: "+usd(paper.balance-paper.initial)+"\nOpen / Closed: "+paper.open.size()+" / "+paper.closed.size());
-  if(botLiveText!=null){
-   if(paper==null)botLiveText.setText("Belum ada sesi paper. Start tidak mengirim order broker.");
-   else{
-    boolean fresh=paper.fresh(System.currentTimeMillis())&&ticks!=null;
-    StringBuilder v=new StringBuilder("Balance virtual: "+usd(paper.balance)+"\nRealized PnL: "+usd(paper.balance-paper.initial)+"\nEquity: "+(fresh?usd(paper.equity()):"—")+"\nFloating PnL: "+(fresh?usd(paper.floating()):"—")+"\nOpen / Closed: "+paper.open.size()+" / "+paper.closed.size());
-    v.append(paperFeeKnown?"\nKomisi: "+paperFeeDescription:"\nGross paper • komisi tidak diketahui");
-    if(fresh)v.append(String.format(Locale.US,"\nBid / Ask: %.3f / %.3f",paper.bid,paper.ask));
-    for(PaperHedge.Position p:paper.open)v.append(String.format(Locale.US,"\n%s %.3f  %s",p.buy?"BUY":"SELL",p.entry,fresh?usd(p.pnl(paper.bid,paper.ask,paper.units,paper.fee)):"—"));
-    botLiveText.setText(v.toString());
-   }
-  }
-  if(botLogText!=null){String value=botLogs.isEmpty()?"Tekan START BOT untuk memulai koneksi tick.":android.text.TextUtils.join("\n",botLogs);if(!value.contentEquals(botLogText.getText()))botLogText.setText(value);}
+  if(botSymbolText!=null)botSymbolText.setText("Instrument: "+(liveSymbol.isEmpty()?(preferredSymbol.isEmpty()?"Auto XAUUSD":preferredSymbol):liveSymbol));
+  if(brokerSummaryText!=null)brokerSummaryText.setText(brokerSummary());
+  if(historyLiveText!=null)historyLiveText.setText(historySummary());
+  if(botLiveText!=null){StringBuilder b=new StringBuilder(brokerSummary());if(snapshot!=null&&System.currentTimeMillis()-snapshot.time<=30000)for(int i=0;i<positions.length();i++){JSONObject p=positions.optJSONObject(i);if(p!=null)b.append("\n#"+p.optString("position_id")+" "+p.optString("direction")+" "+p.optString("instrument")+" "+p.optString("volume")+" lot");}botLiveText.setText(b.toString());}
+  if(botLogText!=null){String value=botLogs.isEmpty()?"Tekan START BOT untuk memulai live trading.":android.text.TextUtils.join("\n",botLogs);if(!value.contentEquals(botLogText.getText()))botLogText.setText(value);}
  }
- private void logBot(String message){if(botLogs.size()>=100)botLogs.removeFirst();botLogs.addLast(new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.US).format(new java.util.Date())+"  "+message);}
- private void renderBot(){if(!isDestroyed()&&!isFinishing())updateBotViews();}
  private void selectSymbol(){
-  if(botStarting||(paper!=null&&(paper.running||!paper.open.isEmpty()))){Toast.makeText(this,"Stop dan tutup sesi paper sebelum mengubah simbol.",Toast.LENGTH_LONG).show();return;}
+  if(active()){Toast.makeText(this,"Stop bot dulu.",Toast.LENGTH_SHORT).show();return;}
   EditText input=new EditText(this);input.setText(preferredSymbol);input.setHint("Kosong = auto; contoh XAUUSDm");
-  new AlertDialog.Builder(this).setTitle("Simbol XAUUSD").setMessage("Gunakan nama yang tersedia di akun Exness. Mengganti simbol mengarsipkan sesi yang sudah ditutup dan memulai wallet virtual baru; arsip belum ditampilkan.").setView(input).setNegativeButton("Batal",null).setPositiveButton("Simpan",(d,w)->{String v=input.getText().toString().trim();if(!v.isEmpty()&&!v.matches("XAUUSD[a-z0-9._-]{0,5}")){Toast.makeText(this,"Format simbol tidak valid",Toast.LENGTH_SHORT).show();return;}stopBot("STOPPED",true);preferredSymbol=v;prefs.edit().putString("paper_symbol",v).apply();String key=paperKey();if(key!=null){String saved=prefs.getString(key,null);if(saved!=null)prefs.edit().putString(key+"_archive_"+System.currentTimeMillis(),saved).remove(key).apply();}paper=null;paperSymbol="";paperFeeDescription="Belum diperiksa";persistedOwner="";showShell();}).show();
+  new AlertDialog.Builder(this).setTitle("Simbol broker").setMessage("Gunakan simbol yang tersedia di akun Exness.").setView(input).setNegativeButton("Batal",null).setPositiveButton("Simpan",(d,w)->{String v=input.getText().toString().trim();if(!v.isEmpty()&&!v.matches("XAUUSD[a-z0-9._-]{0,5}")){Toast.makeText(this,"Format simbol tidak valid",Toast.LENGTH_SHORT).show();return;}preferredSymbol=v;prefs.edit().putString("paper_symbol",v).apply();liveSymbol="";updateLiveViews();}).show();
  }
- private String optionalText(JSONObject j,String name){Object raw=j==null?null:j.opt(name);return raw instanceof String?(String)raw:null;}
- private void preflightLog(int run,String message){handler.post(()->{if(run==botGeneration&&botStarting&&!isDestroyed()){logBot(message);renderBot();}});}
  private void startBot(){
-  if(preview){Toast.makeText(this,"Matikan preview untuk memakai tick Exness.",Toast.LENGTH_SHORT).show();return;}
-  if(client==null){connectDialog();return;}if(busy||botStarting||(paper!=null&&paper.running))return;
-  if(paper!=null&&paper.halted&&paper.open.isEmpty()){Toast.makeText(this,"Emergency latch aktif. Sesi paper telah dihentikan.",Toast.LENGTH_LONG).show();return;}
-  if(paper!=null&&ticks!=null&&paper.fresh(System.currentTimeMillis())){if(paper.halted){paper.emergency(System.currentTimeMillis());botStatus="EMERGENCY CLOSED";renderBot();return;}paper.start();botStatus="WAITING FOR TICKS";logBot("PAPER START");renderBot();return;}
+  if(client==null){connectDialog();return;}if(active()||busy)return;
   if(System.currentTimeMillis()<cooldown){Toast.makeText(this,"Cooldown API aktif.",Toast.LENGTH_SHORT).show();return;}
-  if(ticks!=null){ticks.cancel();ticks=null;if(paper!=null){paper.lastTick=0;paper.bid=Double.NaN;paper.ask=Double.NaN;}}handler.removeCallbacks(watchdog);
-  final int run=++botGeneration;final ExnessClient current=client;botStarting=true;botStartTime=System.currentTimeMillis();botStatus="CONNECTING";logBot("Memeriksa akun dan simbol");renderBot();
-  final String requestedSymbol=preferredSymbol;
-  new Thread(()->{
-   String stage="ACCOUNT";
-   try{
-    JSONObject details=current.details();PreflightPolicy.account(optionalText(details,"currency"),optionalText(details,"trade_mode"));preflightLog(run,"ACCOUNT OK • paper currency USD terpisah");
-    stage="INSTRUMENTS";JSONArray symbols=current.instruments().getJSONArray("instruments");java.util.ArrayList<String> names=new java.util.ArrayList<>();
-    for(int i=0;i<symbols.length();i++){Object value=symbols.get(i);if(!(value instanceof String))throw new org.json.JSONException("INVALID_SYMBOL_LIST");names.add((String)value);}
-    java.util.ArrayList<String> gold=new java.util.ArrayList<>();for(String sym:names)if(sym.matches("XAUUSD[a-z0-9._-]{0,5}")&&!gold.contains(sym))gold.add(sym);
-    if(gold.size()>1)preflightLog(run,"XAUUSD tersedia: "+String.join(", ",gold.subList(0,Math.min(6,gold.size()))));
-    final String actual=PreflightPolicy.symbol(names,requestedSymbol);preflightLog(run,"INSTRUMENT OK • "+actual);
-    stage="CONDITIONS";JSONObject cond=current.conditions(actual);if(!actual.equals(optionalText(cond,"instrument")))throw new IllegalArgumentException("INSTRUMENT_MISMATCH");
-    final double units=PreflightPolicy.units(optionalText(cond,"contract_size"),optionalText(cond,"volume_min"),optionalText(cond,"volume_max"),optionalText(cond,"volume_step"),optionalText(cond,"quote_currency"),optionalText(cond,"trade_mode"));
-    preflightLog(run,"CONDITIONS OK • lot 0.01");
-    stage="COMMISSION";JSONObject commission=cond.optJSONObject("commission_settings"),cv=commission==null?null:commission.optJSONObject("commission_value");final PreflightPolicy.Fee estimate=PreflightPolicy.fee(optionalText(commission,"commission_type"),optionalText(cv,"amount"),optionalText(cv,"currency"));final double fee=estimate.amount;
-    preflightLog(run,estimate.known?"COMMISSION • estimasi tersedia":"COMMISSION UNKNOWN • gross paper only; biaya tidak dihitung");
-    stage="WS_SIGN";final okhttp3.Request req=current.tickRequest();preflightLog(run,"WS SIGN OK");
-    handler.post(()->{if(run!=botGeneration||current!=client||isDestroyed()||!botStarting)return;
-     if(paper!=null&&(!actual.equals(paperSymbol)||Math.abs(paper.units-units)>1e-9||Math.abs(paper.fee-fee)>1e-9||paperFeeKnown!=estimate.known)){stopBot("PARAMETER CHANGED",true);return;}
-     if(paper==null){paper=new PaperHedge(100,units,fee,1,2,.5,5,30000,5);paperSymbol=actual;}
-     paperFeeKnown=estimate.known;paperFeeDescription=estimate.known?String.format(java.util.Locale.US,"$%.4f estimasi round-trip",fee):"UNKNOWN • gross paper, bukan net profit";persistPaper(true);paper.start();botStatus="WAITING FOR TICKS";botStartTime=System.currentTimeMillis();botStarting=false;
-     final String subId=java.util.UUID.randomUUID().toString();
-     ticks=socketClient.newWebSocket(req,new okhttp3.WebSocketListener(){
-      @Override public void onOpen(okhttp3.WebSocket w,okhttp3.Response response){
-       if(!"exness-ws-protocol".equals(response.header("Sec-WebSocket-Protocol"))){w.cancel();handler.post(()->{if(run==botGeneration)stopBot("WS PROTOCOL FAILED",true);});return;}
-       try{boolean sent=w.send(new JSONObject().put("id",subId).put("subscribe",new JSONObject().put("event","ticks").put("instruments",new JSONArray().put(actual))).toString());handler.post(()->{if(run==botGeneration){if(!sent){stopBot("WS SUBSCRIBE SEND FAILED",true);return;}logBot("WS OPEN • subscribe terkirim; menunggu data");renderBot();}});}catch(Exception ex){handler.post(()->{if(run==botGeneration)stopBot("WS SUBSCRIBE SEND FAILED",true);});w.cancel();}
-      }
-      @Override public void onMessage(okhttp3.WebSocket w,String msg){
-       if(msg.length()>16384){w.cancel();handler.post(()->{if(run==botGeneration)stopBot("WS FRAME TOO LARGE",true);});return;}
-       try{
-        JSONObject j=new JSONObject(msg);
-        if(j.has("code")){
-         if(j.length()==2&&j.optInt("code")==200&&subId.equals(j.optString("id")))return;
-         final int code=j.optInt("code",-1);final String reason=PreflightPolicy.publicCode(code)?"WS CODE "+code:"WS CONTROL INVALID";handler.post(()->{if(run==botGeneration){if(code==3015||code==1)cooldown=System.currentTimeMillis()+60000;stopBot(reason,true);}});return;
-        }
-        if(!actual.equals(j.getString("instrument"))||!(j.get("bid") instanceof Number)||!(j.get("ask") instanceof Number))return;
-        final double bid=j.getDouble("bid"),ask=j.getDouble("ask");final long ts=java.time.OffsetDateTime.parse(j.getString("timestamp")).toInstant().toEpochMilli();
-        handler.post(()->{if(run!=botGeneration||ticks!=w||current!=client||paper==null)return;
-         boolean first=paper.lastTick==0;String prev=paper.note;String result=paper.tick(bid,ask,ts,System.currentTimeMillis());if(result.equals("INVALID_OR_STALE"))return;if(first)logBot("FIRST VALID TICK • "+actual);
-         if(paper.halted&&!paper.open.isEmpty())paper.emergency(System.currentTimeMillis());persistPaper(false);if(paper.running)botStatus="RUNNING / PAPER";else if(paper.halted)botStatus="EMERGENCY";
-         if(!prev.equals(result)&&(result.startsWith("PAPER ")||result.equals("HARVEST")||result.startsWith("EMERGENCY")))logBot(result);
-         long now=System.currentTimeMillis();if(now-lastBotPaint>=1000){lastBotPaint=now;renderBot();}
-        });
-       }catch(Exception ignored){}
-      }
-      @Override public void onFailure(okhttp3.WebSocket w,Throwable e,okhttp3.Response response){handler.post(()->{if(run==botGeneration){if(response!=null&&response.code()==429)cooldown=System.currentTimeMillis()+60000;stopBot(response==null?"WS "+PreflightPolicy.safeReason(e):"WS HTTP "+response.code(),true);}});}
-      @Override public void onClosed(okhttp3.WebSocket w,int code,String reason){handler.post(()->{if(run==botGeneration)stopBot("WS CLOSED",true);});}
-     });
-     logBot("Subscription "+actual+"; menunggu tick valid");handler.removeCallbacks(watchdog);handler.postDelayed(watchdog,1000);renderBot();
-    });
-   }catch(Exception e){final String failedStage=stage;handler.post(()->{if(run!=botGeneration)return;if(e instanceof ExnessClient.ApiError){ExnessClient.ApiError api=(ExnessClient.ApiError)e;if(api.http==429)cooldown=System.currentTimeMillis()+Math.max(60000,api.retryMs);stopBot(failedStage+" HTTP "+api.http+(PreflightPolicy.publicCode(api.code)?" / CODE "+api.code:""),true);}else stopBot(failedStage+" / "+PreflightPolicy.safeReason(e),true);});}
-  },"hedge-tick-preflight").start();
- }
- private void stopBot(String reason,boolean disconnect){
-  botStarting=false;if(paper!=null)paper.stop(reason);botStatus=reason;logBot(reason);persistPaper(true);
-  if(disconnect||ticks==null){botGeneration++;handler.removeCallbacks(watchdog);if(ticks!=null){ticks.cancel();ticks=null;}if(paper!=null){paper.bid=Double.NaN;paper.ask=Double.NaN;paper.lastTick=0;}}
-  renderBot();
- }
- private void emergencyPaper(){
-  if(paper==null){Toast.makeText(this,"Belum ada sesi paper.",Toast.LENGTH_SHORT).show();return;}
-  new AlertDialog.Builder(this).setTitle("Emergency close paper?").setMessage("Menutup posisi virtual saja. Tidak menyentuh posisi broker.").setNegativeButton("Batal",null).setPositiveButton("Close paper",(d,w)->{
-   boolean ok=paper.emergency(System.currentTimeMillis());persistPaper(true);botStatus=ok?"EMERGENCY CLOSED":"EMERGENCY / STALE";logBot(paper.note);renderBot();
+  new AlertDialog.Builder(this).setTitle("Aktifkan LIVE TRADING?").setMessage("Akun Exness "+client.account+"\nBot akan mengirim order sungguhan otomatis, 0.01 lot, maksimum 5 posisi, target gross $1. Drawdown guard 15% tidak menjamin batas kerugian. Gunakan akun hedging khusus bot tanpa posisi manual. APK harus tetap aktif. Konfirmasi berarti kamu mengizinkan sesi ini.").setNegativeButton("Batal",null).setPositiveButton("START LIVE",(d,w)->{
+   if(active()||busy||client==null)return;lastLiveReason="";snapshot=null;positions=new JSONArray();generation++;
+   live=new LiveBroker(client,prefs,handler,preferredSymbol,(st,sym,reason,acct,pos,deal)->{
+    if(isDestroyed()||isFinishing())return;
+    botStatus=st;liveSymbol=sym;
+    if(reason!=null&&!reason.isEmpty()&&!reason.equals(lastLiveReason)){lastLiveReason=reason;logBot(reason);}
+    if(acct!=null&&live!=null&&live.active&&!live.currency.isEmpty()){
+     try{JSONObject parsed=new JSONObject().put("status","SNAPSHOT").put("balance",acct.get("balance")).put("equity",acct.get("equity")).put("used_margin",acct.get("used_margin")).put("currency",live.currency).put("asOf",java.time.Instant.ofEpochMilli(live.stateTime).toString());snapshot=new Snapshot(parsed);positions=pos;}catch(Exception ex){snapshot=null;positions=new JSONArray();}
+    } else if(!active()){snapshot=null;positions=new JSONArray();cooldown=System.currentTimeMillis()+60000;status="Bot berhenti; refresh broker setelah cooldown.";}
+    if(deal!=null){appendBrokerDeal(deal);if(tab==3)showShell();}
+    long now=System.currentTimeMillis();if(deal!=null||!active()||now-lastPaint>=500){lastPaint=now;updateLiveViews();}
+   });
+   logBot("LIVE session authorized");live.start();updateLiveViews();
   }).show();
  }
+ private void stopBot(String why){if(live!=null&&live.active)live.halt(why);else{botStatus="STOPPED";logBot(why);updateLiveViews();}}
+ private void emergencyLive(){
+  if(!active()){Toast.makeText(this,"Bot tidak terhubung. Tutup posisi melalui Exness.",Toast.LENGTH_LONG).show();return;}
+  new AlertDialog.Builder(this).setTitle("Close posisi nyata milik bot?").setMessage("Order close dapat merealisasikan kerugian. Posisi manual tidak disentuh. Jika jaringan terputus, tutup di broker.").setNegativeButton("Batal",null).setPositiveButton("CLOSE BOT",(d,w)->{if(active())live.emergency();}).show();
+ }
+ private void appendBrokerDeal(JSONObject deal){
+  if(!"close".equals(deal.optString("type")))return;String id=deal.optString("deal_id");if(id.isEmpty())return;
+  for(int i=0;i<deals.length();i++){JSONObject row=deals.optJSONObject(i),x=row==null?null:row.optJSONObject("deal");if(x!=null&&id.equals(x.optString("deal_id")))return;}
+  try{deals.put(new JSONObject().put("event_time",deal.optString("create_time")).put("deal",deal));historyStatus="Close deals broker yang diterima; refresh saat bot berhenti untuk riwayat API.";}catch(Exception ignored){}
+ }
  private void history(){
-  add(body,txt("Trade History",25,WHITE,true));gap(body,13);
-  LinearLayout sources=row();weighted(sources,action("Paper / Virtual",paperHistory,()->{paperHistory=true;showShell();}),false);weighted(sources,action("Exness / Broker",!paperHistory,()->{paperHistory=false;showShell();}),true);add(body,sources);gap(body,10);
-  LinearLayout filters=row();String[] names={"All","Profit","Loss"};for(int i=0;i<3;i++){final int n=i;TextView t=action(names[i],filter==i,()->{filter=n;showShell();});if(i==0)weighted(filters,t,false);else weighted(filters,t,true);}add(body,filters);gap(body,12);
-  if(!preview&&paperHistory){paperHistoryPage();return;}
-  LinearLayout total=card(body);add(total,txt(preview?"Total realized PnL":"Net PnL lengkap",13,MUTED,false));add(total,txt(preview?"+1.45":"—",27,TEAL,true));line(total,preview?"Contoh riwayat • USD":"Profit close deal per transaksi; belum termasuk rekonsiliasi seluruh biaya dan halaman.");
-  if(preview){for(int i=0;i<demoPnl.length;i++){double p=demoPnl[i];if((filter==1&&p<0)||(filter==2&&p>=0))continue;LinearLayout trade=card(body);labelValue(trade,"Contoh #"+(i+1)+" • "+demoSides[i],String.format(Locale.US,"%+.2f USD",p),p>=0?TEAL:RED);line(trade,"Simulasi ilustratif • bukan transaksi Exness");}}
-  else{LinearLayout empty=card(body);line(empty,historyStatus);gap(empty,8);add(empty,action("Refresh history",false,()->refreshHistory()));for(int i=deals.length()-1;i>=0;i--){JSONObject item=deals.optJSONObject(i);if(item==null)continue;JSONObject p=item.optJSONObject("deal");if(p==null)continue;JSONObject profit=p.optJSONObject("profit");if(profit==null)continue;try{BigDecimal n=new BigDecimal(profit.getString("amount"));if((filter==1&&n.signum()<=0)||(filter==2&&n.signum()>=0))continue;LinearLayout trade=card(body);labelValue(trade,p.optString("instrument")+" • "+p.optString("direction"),amount(n)+" "+profit.optString("currency"),pnlColor(n));line(trade,item.optString("event_time"));line(trade,"Volume: "+p.optString("volume")+" • Harga: "+p.optString("price"));}catch(Exception ignored){}}}
- }
- private void paperHistoryPage(){
-  LinearLayout total=card(body);add(total,txt("Paper • transaksi simulasi",17,WHITE,true));
-  if(paper==null){line(total,"Belum ada sesi virtual tersimpan.");return;}
-  labelValue(total,"Balance virtual",usd(paper.balance),WHITE);labelValue(total,"Realized PnL",usd(paper.balance-paper.initial),TEAL);
-  double profit=0,loss=0;int wins=0;for(PaperHedge.Closed c:paper.closed){if(c.pnl>0){profit+=c.pnl;wins++;}else if(c.pnl<0)loss+=c.pnl;}
-  labelValue(total,"Profit tersimpan",usd(profit),TEAL);labelValue(total,"Loss tersimpan",usd(loss),RED);
-  labelValue(total,"Closed / Open",paper.closed.size()+" / "+paper.open.size(),WHITE);line(total,"Maksimal 500 close terbaru; bukan transaksi broker. Floating PnL tidak masuk history sampai posisi ditutup. Biaya: "+paperFeeDescription);
-  gap(total,6);add(total,action("Refresh history paper",false,()->showShell()));
-  if(paper.closed.isEmpty())line(body,"Tidak ada posisi virtual yang sudah ditutup.");
-  for(int i=paper.closed.size()-1;i>=0;i--){PaperHedge.Closed c=paper.closed.get(i);if((filter==1&&c.pnl<=0)||(filter==2&&c.pnl>=0))continue;LinearLayout item=card(body);labelValue(item,paperSymbol+" • "+(c.position.buy?"BUY":"SELL"),usd(c.pnl),c.pnl<0?RED:TEAL);line(item,String.format(Locale.US,"Entry %.3f  •  Exit %.3f",c.position.entry,c.exit));line(item,new java.text.SimpleDateFormat("dd MMM yyyy HH:mm:ss",Locale.US).format(new java.util.Date(c.time)));}
- }
- private String paperKey(){return client==null?null:"paper_session_"+client.account+"_"+Integer.toHexString(client.gateway.hashCode());}
- private void persistPaper(boolean force){
-  String key=paperKey();if(paper==null||key==null)return;
-  long lastClose=paper.closed.isEmpty()?0:paper.closed.get(paper.closed.size()-1).time;
-  if(!force&&key.equals(persistedOwner)&&persistedOpen==paper.open.size()&&persistedClosed==paper.closed.size()&&persistedLastClose==lastClose)return;
-  try{
-   org.json.JSONObject j=new org.json.JSONObject().put("symbol",paperSymbol).put("known",paperFeeKnown).put("feeDescription",paperFeeDescription).put("units",paper.units).put("fee",paper.fee).put("balance",paper.balance).put("peak",paper.peak).put("halted",paper.halted).put("lastEntry",paper.lastEntry);
-   JSONArray op=new JSONArray(),cl=new JSONArray();
-   for(PaperHedge.Position p:paper.open)op.put(new JSONObject().put("buy",p.buy).put("entry",p.entry).put("time",p.time));
-   for(int i=Math.max(0,paper.closed.size()-500);i<paper.closed.size();i++){PaperHedge.Closed c=paper.closed.get(i);cl.put(new JSONObject().put("buy",c.position.buy).put("entry",c.position.entry).put("entryTime",c.position.time).put("exit",c.exit).put("pnl",c.pnl).put("time",c.time));}
-   j.put("open",op).put("closed",cl);prefs.edit().putString(key,j.toString()).apply();persistedOwner=key;persistedOpen=paper.open.size();persistedClosed=paper.closed.size();persistedLastClose=lastClose;
-  }catch(Exception e){logBot("PAPER STORAGE FAILED");}
- }
- private void restorePaper(){
-  String key=paperKey();if(key==null)return;String raw=prefs.getString(key,null);if(raw==null)return;
-  try{
-   JSONObject j=new JSONObject(raw);PaperHedge p=new PaperHedge(100,j.getDouble("units"),j.getDouble("fee"),1,2,.5,5,30000,5);p.balance=j.getDouble("balance");p.peak=j.getDouble("peak");p.halted=j.getBoolean("halted");p.lastEntry=j.getLong("lastEntry");if(!Double.isFinite(p.balance)||!Double.isFinite(p.peak))throw new Exception();
-   JSONArray op=j.getJSONArray("open"),cl=j.getJSONArray("closed");if(op.length()>5||cl.length()>500)throw new Exception();
-   for(int i=0;i<op.length();i++){JSONObject x=op.getJSONObject(i);p.open.add(new PaperHedge.Position(x.getBoolean("buy"),x.getDouble("entry"),x.getLong("time")));}
-   for(int i=0;i<cl.length();i++){JSONObject x=cl.getJSONObject(i);p.closed.add(new PaperHedge.Closed(new PaperHedge.Position(x.getBoolean("buy"),x.getDouble("entry"),x.getLong("entryTime")),x.getDouble("exit"),x.getDouble("pnl"),x.getLong("time")));}
-   paperSymbol=j.getString("symbol");paperFeeKnown=j.getBoolean("known");paperFeeDescription=j.getString("feeDescription");paper=p;persistedOwner=key;persistedOpen=p.open.size();persistedClosed=p.closed.size();persistedLastClose=p.closed.isEmpty()?0:p.closed.get(p.closed.size()-1).time;botStatus="STOPPED / RESTORED";logBot("Sesi paper lokal dipulihkan; Start untuk lanjut.");
-  }catch(Exception e){logBot("PAPER RESTORE FAILED");}
+  add(body,txt("Trade History • Exness",25,WHITE,true));gap(body,13);LinearLayout filters=row();String[] names={"All","Profit","Loss"};for(int i=0;i<3;i++){final int n=i;TextView t=action(names[i],filter==i,()->{filter=n;showShell();});weighted(filters,t,i!=0);}add(body,filters);gap(body,12);
+  LinearLayout total=card(body);historyLiveText=txt(historySummary(),14,WHITE,true);add(total,historyLiveText);gap(total,8);add(total,action("Refresh history broker",false,()->refreshHistory()));
+  for(int i=deals.length()-1;i>=0;i--){JSONObject row=deals.optJSONObject(i),p=row==null?null:row.optJSONObject("deal");if(p==null)continue;JSONObject profit=p.optJSONObject("profit");if(profit==null)continue;try{BigDecimal n=new BigDecimal(profit.getString("amount"));if((filter==1&&n.signum()<=0)||(filter==2&&n.signum()>=0))continue;LinearLayout trade=card(body);labelValue(trade,p.optString("instrument")+" • "+p.optString("direction"),amount(n)+" "+profit.optString("currency"),pnlColor(n));line(trade,"Deal #"+p.optString("deal_id")+" • "+row.optString("event_time"));line(trade,"Volume: "+p.optString("volume")+" • Harga: "+p.optString("price"));}catch(Exception ignored){}}
  }
  private void settings(){
   add(body,txt("System Settings",25,WHITE,true));gap(body,13);
   LinearLayout c=card(body);add(c,txt("Exness account",17,WHITE,true));gap(c,8);line(c,client==null?"API belum tersambung. Tidak perlu login LUMAVUN.":"API lokal tersimpan • akun "+client.account);gap(c,10);add(c,action("Sambungkan API Exness",true,()->connectDialog()));gap(c,8);add(c,action("Hapus koneksi lokal",false,()->disconnect()));
-  LinearLayout p=card(body);add(p,txt("Risk management",17,WHITE,true));gap(p,10);labelValue(p,"Individual take profit","$1 (rancangan)",TEAL);labelValue(p,"Emergency drawdown","15% (rancangan)",RED);labelValue(p,"Martingale","Nonaktif",MUTED);line(p,"Pengaturan engine native belum diterapkan pada transaksi.");
-  LinearLayout d=card(body);add(d,txt("Appearance",17,WHITE,true));gap(d,8);labelValue(d,"Theme","Midnight / teal",TEAL);Switch sw=new Switch(this);sw.setText("Preview desain (data contoh)");sw.setTextColor(WHITE);sw.setTextSize(14);sw.setMinHeight(dp(48));sw.setChecked(preview);sw.setOnCheckedChangeListener((b,checked)->{stopBot("STOPPED",true);preview=checked;snapshot=null;generation++;busy=false;prefs.edit().putBoolean("preview",preview).apply();showShell();});add(d,sw);
-  LinearLayout about=card(body);add(about,txt("About LUMAVUN Hedge",16,WHITE,true));gap(about,7);line(about,"Version 0.4.3 • Standalone Android");line(about,"Direct signed REST & ticks • paper execution");
+  LinearLayout p=card(body);add(p,txt("Risk management",17,WHITE,true));gap(p,10);labelValue(p,"Profit target","$1 gross",TEAL);labelValue(p,"Drawdown guard","15% • tidak dijamin",RED);labelValue(p,"Martingale","Nonaktif",MUTED);line(p,"Akun khusus bot, USD/USC, market execution. Status order ambigu mengunci Start. Gunakan Exness untuk cek/close posisi jika terputus.");
+  LinearLayout about=card(body);add(about,txt("About LUMAVUN Hedge",16,WHITE,true));gap(about,7);line(about,"Version 0.5.0 • Native Android");line(about,"Direct REST + broker transaction and tick streams • LIVE only");
  }
  private void connectDialog(){
-  if(busy)return;if(paper!=null&&!paper.open.isEmpty()){Toast.makeText(this,"Tutup posisi paper melalui emergency sebelum mengganti akun.",Toast.LENGTH_LONG).show();return;}stopBot("STOPPED",true);paper=null;paperSymbol="";
+  if(busy||active()){Toast.makeText(this,"Stop bot sebelum mengganti akun.",Toast.LENGTH_LONG).show();return;}
   LinearLayout form=column();form.setPadding(dp(20),dp(6),dp(20),dp(10));
   String[] labels={"Trading account ID","API key","Private signing key (hex / PEM)","Gateway dari DNS widget"};
   EditText[] inputs=new EditText[4];
@@ -319,8 +200,8 @@ public class MainActivity extends Activity {
    }catch(Exception e){Toast.makeText(this,"Periksa format account, API key, secret dan Gateway.",Toast.LENGTH_LONG).show();}
   }));dlg.show();
  }
- private void disconnect(){if(busy)return;if(paper!=null&&!paper.open.isEmpty()){Toast.makeText(this,"Tutup posisi paper terlebih dahulu.",Toast.LENGTH_LONG).show();return;}stopBot("STOPPED",true);paper=null;paperSymbol="";new AlertDialog.Builder(this).setTitle("Hapus koneksi?").setMessage("Kunci lokal dihapus. Akses di Exness tidak otomatis dicabut.").setNegativeButton("Batal",null).setPositiveButton("Hapus",(d,w)->{try{vault.clear();client=null;generation++;snapshot=null;positions=new JSONArray();deals=new JSONArray();status="API belum tersambung.";historyStatus="Belum dimuat";showShell();}catch(Exception e){status="Gagal menghapus koneksi lokal.";showShell();}}).show();}
- private void refresh(){if(preview){Toast.makeText(this,"Nonaktifkan preview untuk membaca akun.",Toast.LENGTH_SHORT).show();return;}if(client==null){connectDialog();return;}loadSnapshot(client,null);}
+ private void disconnect(){if(busy||active()){Toast.makeText(this,"Stop bot terlebih dahulu.",Toast.LENGTH_LONG).show();return;}new AlertDialog.Builder(this).setTitle("Hapus koneksi?").setMessage("Kunci lokal dihapus. Akses di Exness tidak otomatis dicabut.").setNegativeButton("Batal",null).setPositiveButton("Hapus",(d,w)->{try{vault.clear();client=null;generation++;snapshot=null;positions=new JSONArray();deals=new JSONArray();status="API belum tersambung.";historyStatus="Belum dimuat";showShell();}catch(Exception e){status="Gagal menghapus koneksi lokal.";showShell();}}).show();}
+ private void refresh(){if(active()){updateLiveViews();return;}if(preview){Toast.makeText(this,"Nonaktifkan preview untuk membaca akun.",Toast.LENGTH_SHORT).show();return;}if(client==null){connectDialog();return;}loadSnapshot(client,null);}
  private void loadSnapshot(ExnessClient c,JSONObject store){
   if(busy)return;if(System.currentTimeMillis()<cooldown){Toast.makeText(this,"Cooldown API. Jangan refresh berulang.",Toast.LENGTH_SHORT).show();return;}
   busy=true;snapshot=null;positions=new JSONArray();status="Menghubungi Exness langsung…";int ticket=++generation;showShell();
@@ -330,13 +211,13 @@ public class MainActivity extends Activity {
    catch(Exception ignored){}
    final Snapshot value=out;final JSONArray list=pos;final String message=msg;final long delay=retry;
    handler.post(()->{if(ticket!=generation||isDestroyed()||isFinishing())return;busy=false;cooldown=System.currentTimeMillis()+delay;status=message;
-    if(value!=null&&list!=null){try{if(store!=null){vault.save(store);deals=new JSONArray();historyStatus="Belum dimuat";}client=c;if(store!=null){paper=null;paperSymbol="";persistedOwner="";restorePaper();}snapshot=value;positions=list;preview=false;prefs.edit().putBoolean("preview",false).apply();}catch(Exception e){status="Gagal menyimpan kunci lokal.";snapshot=null;positions=new JSONArray();}}
+    if(value!=null&&list!=null){try{if(store!=null){vault.save(store);deals=new JSONArray();historyStatus="Belum dimuat";}client=c;if(store!=null){live=null;liveSymbol="";botStatus="STOPPED";}snapshot=value;positions=list;preview=false;prefs.edit().putBoolean("preview",false).apply();}catch(Exception e){status="Gagal menyimpan kunci lokal.";snapshot=null;positions=new JSONArray();}}
     showShell();if(snapshot!=null)handler.postDelayed(()->{if(ticket==generation&&!isDestroyed()){snapshot=null;positions=new JSONArray();status="Snapshot kedaluwarsa. Refresh saldo.";showShell();}},30000);
    });
   },"exness-direct-snapshot").start();
  }
  private void refreshHistory(){
-  if(preview||busy)return;if(client==null){connectDialog();return;}if(System.currentTimeMillis()<cooldown){Toast.makeText(this,"Cooldown API",Toast.LENGTH_SHORT).show();return;}
+  if(active()){Toast.makeText(this,"Histori baru masuk dari stream; stop bot untuk refresh REST.",Toast.LENGTH_LONG).show();return;}if(preview||busy)return;if(client==null){connectDialog();return;}if(System.currentTimeMillis()<cooldown){Toast.makeText(this,"Cooldown API",Toast.LENGTH_SHORT).show();return;}
   final ExnessClient current=client;final int ticket=++generation;busy=true;historyStatus="Memuat close deals 24 jam terakhir…";deals=new JSONArray();snapshot=null;positions=new JSONArray();showShell();
   new Thread(()->{JSONArray result=null;String message="History tidak tersedia atau rentang ditolak oleh API.";long delay=10000;
    try{current.limits();Instant end=Instant.now(),start=end.minusSeconds(86400);String query="from="+Uri.encode(start.toString())+"&to="+Uri.encode(end.toString())+"&deal_type=close&limit=100";JSONObject payload=current.deals(query);result=payload.getJSONArray("items");message="Close deals • 24 jam • "+result.length()+" transaksi"+(payload.optBoolean("has_more")||!payload.optString("next_cursor","").isEmpty()?" • halaman pertama, belum lengkap":"");}
@@ -344,9 +225,9 @@ public class MainActivity extends Activity {
    final JSONArray list=result;final String msg=message;final long wait=delay;handler.post(()->{if(ticket!=generation||isDestroyed()||client!=current)return;busy=false;cooldown=System.currentTimeMillis()+wait;historyStatus=msg;deals=list==null?new JSONArray():list;showShell();});},"exness-history").start();
  }
  @Override public void onBackPressed(){if(tab!=0){tab=0;showShell();}else super.onBackPressed();}
- @Override protected void onPause(){stopBot("PAUSED / APP BACKGROUND",true);generation++;busy=false;snapshot=null;positions=new JSONArray();status="Refresh saldo setelah kembali ke aplikasi.";super.onPause();}
+ @Override protected void onPause(){if(active())stopBot("PAUSED / APP BACKGROUND • posisi tetap terbuka");generation++;busy=false;snapshot=null;positions=new JSONArray();status="Refresh saldo setelah kembali ke aplikasi.";super.onPause();}
  @Override protected void onResume(){super.onResume();if(root!=null)showShell();}
- @Override protected void onDestroy(){botGeneration++;if(ticks!=null){ticks.cancel();ticks=null;}socketClient.dispatcher().executorService().shutdown();generation++;handler.removeCallbacksAndMessages(null);super.onDestroy();}
+ @Override protected void onDestroy(){if(active())live.halt("APP CLOSED • posisi tetap terbuka");generation++;handler.removeCallbacksAndMessages(null);super.onDestroy();}
  private class NavIcon extends View{
   int kind,col;Paint p=new Paint(3);NavIcon(int k,int c){super(MainActivity.this);kind=k;col=c;setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);}
   @Override protected void onDraw(Canvas c){super.onDraw(c);c.save();c.scale(getWidth()/24f,getHeight()/24f);p.setColor(col);p.setStrokeWidth(1.6f);p.setStyle(Paint.Style.STROKE);p.setStrokeCap(Paint.Cap.ROUND);p.setStrokeJoin(Paint.Join.ROUND);
