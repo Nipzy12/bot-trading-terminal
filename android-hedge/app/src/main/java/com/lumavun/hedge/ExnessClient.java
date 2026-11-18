@@ -47,7 +47,7 @@ final class ExnessClient {
   }else throw new Exception("INVALID_PRIVATE_KEY");
  }
  static final class ApiError extends Exception{
-  final int http;ApiError(int http){super("HTTP "+http);this.http=http;}
+  final int http,code;final long retryMs;ApiError(int http,int code,long retryMs){super("HTTP "+http);this.http=http;this.code=code;this.retryMs=retryMs;}
  }
  JSONObject request(String host,String method,String path,JSONObject body,String idempotency)throws Exception{
   byte[] bytes=body==null?new byte[0]:body.toString().getBytes(StandardCharsets.UTF_8);
@@ -60,7 +60,12 @@ final class ExnessClient {
    c.setInstanceFollowRedirects(false);c.setConnectTimeout(8000);c.setReadTimeout(10000);c.setUseCaches(false);c.setRequestMethod(method);
    c.setRequestProperty("Accept","application/json");c.setRequestProperty("EXN-API-KEY",key);c.setRequestProperty("EXN-IDEMPOTENCY-KEY",idempotency);c.setRequestProperty("EXN-TIMESTAMP",Long.toString(ts));c.setRequestProperty("EXN-SIGN-VERSION","1");c.setRequestProperty("EXN-DATA",b64(payload));c.setRequestProperty("EXN-SIGN",b64(signer.generateSignature()));
    if(body!=null){c.setDoOutput(true);c.setRequestProperty("Content-Type","application/json");c.setFixedLengthStreamingMode(bytes.length);try(OutputStream out=c.getOutputStream()){out.write(bytes);}}
-   int code=c.getResponseCode();if(code!=200&&code!=202)throw new ApiError(code);
+   int code=c.getResponseCode();if(code!=200&&code!=202){
+    int publicCode=-1;long retry=0;
+    try{String header=c.getHeaderField("Retry-After");if(header!=null){long sec=Long.parseLong(header.trim());if(sec>0&&sec<=86400)retry=sec*1000;}}catch(Exception ignored){}
+    try(InputStream error=c.getErrorStream()){if(error!=null){ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buf=new byte[1024];int n;while((n=error.read(buf))!=-1){if(out.size()+n>8192)throw new IOException();out.write(buf,0,n);}int v=new JSONObject(out.toString("UTF-8")).optInt("code",-1);if(PreflightPolicy.publicCode(v))publicCode=v;}}catch(Exception ignored){}
+    throw new ApiError(code,publicCode,retry);
+   }
    try(InputStream in=c.getInputStream();ByteArrayOutputStream out=new ByteArrayOutputStream()){
     byte[] chunk=new byte[4096];int n;while((n=in.read(chunk))!=-1){if(out.size()+n>2097152)throw new IOException();out.write(chunk,0,n);}return new JSONObject(out.toString("UTF-8"));
    }
