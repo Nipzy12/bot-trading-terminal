@@ -22,7 +22,7 @@ final class LiveBroker {
  final LiveRules.Signal signal=new LiveRules.Signal();
  volatile boolean active=false; boolean ready=false,closing=false,finished=false;
  WebSocket ticks,events; String status="STOPPED",symbol="",currency="",lastReason=""; JSONObject account;
- BigDecimal contract,multiplier,leverage,bid,ask,peak=BigDecimal.ZERO; long tickTime,stateTime,started,lastAction;
+ BigDecimal contract,multiplier,leverage,bid,ask,peak=BigDecimal.ZERO; long tickTime,stateTime,started,lastAction,lastPaint;
  String pendingKey,pendingOperation,pendingSide,pendingPosition; long pendingAt; JSONObject bufferedEvent;
  int maxMessage=16384;
  final Runnable watchdog=new Runnable(){public void run(){
@@ -153,6 +153,7 @@ final class LiveBroker {
  void onTick(JSONObject j)throws Exception{
   long now=System.currentTimeMillis(),t=timestamp(j,"timestamp");if(t<=tickTime||!LiveRules.fresh(t,now,5000))return;
   double b=j.getDouble("bid"),a=j.getDouble("ask");String trend=signal.next(b,a);bid=BigDecimal.valueOf(b);ask=BigDecimal.valueOf(a);tickTime=t;
+  if(ready&&pendingKey==null&&!closing&&signal.samples>=21&&status.equals("LIVE / WARMUP")){status="LIVE / RUNNING";emit("Sinyal siap; menunggu kondisi entry",null);}
   if(!ready||account==null||pendingKey!=null||!LiveRules.fresh(stateTime,now,15000)||now-lastAction<mutationInterval)return;
   BigDecimal eq=dec(account,"equity"),used=dec(account,"used_margin");
   if(LiveRules.drawdown(eq,peak)){closing=true;status="DRAWDOWN / CLOSE OWNED";}
@@ -166,14 +167,14 @@ final class LiveBroker {
   BigDecimal price="buy".equals(trend)?ask:bid;
   for(JSONObject pos:positions.values())if(trend.equals(pos.getString("direction"))&&price.subtract(dec(pos,"open_price")).abs().compareTo(new BigDecimal("2"))<0)return;
   BigDecimal margin=LiveRules.estimatedMargin(LiveRules.LOT,contract,ask,leverage,multiplier);
-  if(!LiveRules.entryMargin(eq,used,margin)){status="LIVE / MARGIN WAIT";emit("Cadangan free margin tidak cukup (estimasi konservatif)",null);return;}
+  if(!LiveRules.entryMargin(eq,used,margin)){if(!status.equals("LIVE / MARGIN WAIT")){status="LIVE / MARGIN WAIT";emit("Cadangan free margin tidak cukup (estimasi konservatif)",null);}return;}
   send(trend,null);
  }
  void send(String side,String pid){
   if(!active||pendingKey!=null||(!ready)||pid!=null&&!owned.contains(pid))return;
   pendingKey="lumavun-"+UUID.randomUUID();pendingOperation=null;pendingPosition=pid;pendingSide=side;pendingAt=lastAction=System.currentTimeMillis();bufferedEvent=null;
   if(!save()){halt("JOURNAL_WRITE_FAILED");return;}
-  final String key=pendingKey;status="ORDER SENT / WAITING";emit(pid==null?"Request "+side.toUpperCase(Locale.ROOT)+" "+symbol:"Request CLOSE #"+pid,null);
+  final String key=pendingKey;status="REQUEST PENDING / WAITING";emit(pid==null?"Request "+side.toUpperCase(Locale.ROOT)+" "+symbol:"Request CLOSE #"+pid,null);
   worker.execute(()->{
    if(!active)return;
    try{
