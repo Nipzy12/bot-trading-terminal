@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 android {
  namespace 'com.lumavun.hedge'
  compileSdk 35
- defaultConfig { applicationId 'com.lumavun.hedge'; minSdk 26; targetSdk 35; versionCode 3; versionName '0.3.0' }
+ defaultConfig { applicationId 'com.lumavun.hedge'; minSdk 26; targetSdk 35; versionCode 4; versionName '0.4.0' }
 }
 
-dependencies { implementation 'org.bouncycastle:bcprov-jdk18on:1.80' }
+dependencies { implementation 'org.bouncycastle:bcprov-jdk18on:1.80'; implementation 'com.squareup.okhttp3:okhttp:4.12.0' }
