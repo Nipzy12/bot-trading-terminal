@@ -27,6 +27,11 @@ jobs:
           mkdir -p /tmp/hedge-checks
           javac -d /tmp/hedge-checks android-hedge/app/src/main/java/com/lumavun/hedge/PaperHedge.java android-hedge/checks/PaperHedgeChecks.java
           java -cp /tmp/hedge-checks com.lumavun.hedge.PaperHedgeChecks
+      - name: Verify preflight regression cases
+        run: |
+          mkdir -p /tmp/preflight-checks
+          javac -d /tmp/preflight-checks android-hedge/app/src/main/java/com/lumavun/hedge/PreflightPolicy.java android-hedge/checks/PreflightChecks.java
+          java -cp /tmp/preflight-checks com.lumavun.hedge.PreflightChecks
       - uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
