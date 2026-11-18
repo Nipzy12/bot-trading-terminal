@@ -92,7 +92,7 @@ public class MainActivity extends Activity {
  private void showShell(){
   root.removeAllViews();shell=column();shell.setBackgroundColor(BG);root.addView(shell,new LinearLayout.LayoutParams(-1,-1));
   LinearLayout header=row();header.setPadding(dp(17),dp(12),dp(17),dp(10));
-  LinearLayout mark=column();TextView name=txt("◈  LUMAVUN  HEDGE",20,WHITE,true);add(mark,name);add(mark,txt("DIRECT API  /  v0.4.1",11,TEAL,true));header.addView(mark,new LinearLayout.LayoutParams(0,-2,1));
+  LinearLayout mark=column();TextView name=txt("◈  LUMAVUN  HEDGE",20,WHITE,true);add(mark,name);add(mark,txt("DIRECT API  /  v0.4.2",11,TEAL,true));header.addView(mark,new LinearLayout.LayoutParams(0,-2,1));
   TextView mode=txt(preview?"PREVIEW":snapshot!=null?"SNAPSHOT":client==null?"OFFLINE":"API SAVED",11,preview?PURPLE:TEAL,true);mode.setPadding(dp(10),dp(7),dp(10),dp(7));mode.setBackground(bg(PANEL,BORDER,10));header.addView(mode);add(shell,header);
   ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);body=column();body.setPadding(dp(16),dp(6),dp(16),dp(18));scroll.addView(body,new ScrollView.LayoutParams(-1,-2));shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
   nav=row();nav.setPadding(dp(3),dp(4),dp(3),dp(5));nav.setBackground(bg(0xff101c29,BORDER,0));
@@ -238,7 +238,7 @@ public class MainActivity extends Activity {
   LinearLayout c=card(body);add(c,txt("Exness account",17,WHITE,true));gap(c,8);line(c,client==null?"API belum tersambung. Tidak perlu login LUMAVUN.":"API lokal tersimpan • akun "+client.account);gap(c,10);add(c,action("Sambungkan API Exness",true,()->connectDialog()));gap(c,8);add(c,action("Hapus koneksi lokal",false,()->disconnect()));
   LinearLayout p=card(body);add(p,txt("Risk management",17,WHITE,true));gap(p,10);labelValue(p,"Individual take profit","$1 (rancangan)",TEAL);labelValue(p,"Emergency drawdown","15% (rancangan)",RED);labelValue(p,"Martingale","Nonaktif",MUTED);line(p,"Pengaturan engine native belum diterapkan pada transaksi.");
   LinearLayout d=card(body);add(d,txt("Appearance",17,WHITE,true));gap(d,8);labelValue(d,"Theme","Midnight / teal",TEAL);Switch sw=new Switch(this);sw.setText("Preview desain (data contoh)");sw.setTextColor(WHITE);sw.setTextSize(14);sw.setMinHeight(dp(48));sw.setChecked(preview);sw.setOnCheckedChangeListener((b,checked)->{stopBot("STOPPED",true);preview=checked;snapshot=null;generation++;busy=false;prefs.edit().putBoolean("preview",preview).apply();showShell();});add(d,sw);
-  LinearLayout about=card(body);add(about,txt("About LUMAVUN Hedge",16,WHITE,true));gap(about,7);line(about,"Version 0.4.1 • Standalone Android");line(about,"Direct signed REST & ticks • paper execution");
+  LinearLayout about=card(body);add(about,txt("About LUMAVUN Hedge",16,WHITE,true));gap(about,7);line(about,"Version 0.4.2 • Standalone Android");line(about,"Direct signed REST & ticks • paper execution");
  }
  private void connectDialog(){
   if(busy)return;if(paper!=null&&!paper.open.isEmpty()){Toast.makeText(this,"Tutup posisi paper melalui emergency sebelum mengganti akun.",Toast.LENGTH_LONG).show();return;}stopBot("STOPPED",true);paper=null;paperSymbol="";
