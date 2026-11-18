@@ -22,6 +22,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Verify native paper engine
+        run: |
+          mkdir -p /tmp/hedge-checks
+          javac -d /tmp/hedge-checks android-hedge/app/src/main/java/com/lumavun/hedge/PaperHedge.java android-hedge/checks/PaperHedgeChecks.java
+          java -cp /tmp/hedge-checks com.lumavun.hedge.PaperHedgeChecks
       - uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
