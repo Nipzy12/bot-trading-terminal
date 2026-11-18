@@ -33,6 +33,8 @@ public class MainActivity extends Activity {
  private TextView botLiveText, botLogText, botStateText;
  private boolean paperHistory=true;
  private int persistedClosed=-1,persistedOpen=-1;
+ private long persistedLastClose=-1;
+ private TextView paperSummaryText,botSymbolText,botFeeText;
  private String persistedOwner="";
  private ExnessClient client;
  private PaperHedge paper;
@@ -97,7 +99,7 @@ public class MainActivity extends Activity {
  private void labelValue(LinearLayout parent,String label,String value,int color){LinearLayout r=row();TextView a=txt(label,13,MUTED,false);r.addView(a,new LinearLayout.LayoutParams(0,-2,1));TextView b=txt(value,14,color,true);b.setGravity(Gravity.END);r.addView(b,new LinearLayout.LayoutParams(0,-2,1));add(parent,r);gap(parent,8);}
  private void showShell(){
   final int oldY=pageScroll!=null&&renderedTab==tab?pageScroll.getScrollY():0;
-  renderedTab=tab;botLiveText=null;botLogText=null;botStateText=null;
+  renderedTab=tab;botLiveText=null;botLogText=null;botStateText=null;paperSummaryText=null;botSymbolText=null;botFeeText=null;
   root.removeAllViews();shell=column();shell.setBackgroundColor(BG);root.addView(shell,new LinearLayout.LayoutParams(-1,-1));
   LinearLayout header=row();header.setPadding(dp(17),dp(12),dp(17),dp(10));
   LinearLayout mark=column();TextView name=txt("◈  LUMAVUN  HEDGE",20,WHITE,true);add(mark,name);add(mark,txt("DIRECT API  /  v0.4.3",11,TEAL,true));header.addView(mark,new LinearLayout.LayoutParams(0,-2,1));
@@ -126,7 +128,7 @@ public class MainActivity extends Activity {
   LinearLayout r2=row();metric(r2,"Used margin",val("8.00",snapshot==null?null:snapshot.margin),WHITE,false);metric(r2,"Account type",preview?"Contoh":"Belum diverifikasi",MUTED,true);add(body,r2);gap(body,8);line(body,"*Equity − balance adalah selisih snapshot, bukan rincian PnL trade.");
   heading("Market pulse");
   LinearLayout market=card(body);labelValue(market,"XAUUSD / Gold","Exness feed",TEAL);line(market,"Market stream belum aktif. Snapshot posisi berasal dari Exness langsung.");gap(market,9);for(int i=0;i<positions.length();i++){JSONObject p=positions.optJSONObject(i);if(p!=null)labelValue(market,p.optString("instrument")+" "+p.optString("direction"),p.optString("volume")+" lot",WHITE);}
-  if(!preview&&paper!=null){heading("Paper wallet • virtual");LinearLayout pv=card(body);labelValue(pv,"Balance virtual",usd(paper.balance),WHITE);labelValue(pv,"Realized PnL",usd(paper.balance-paper.initial),TEAL);line(pv,"Tidak mengubah saldo Exness.");}
+  if(!preview&&paper!=null){heading("Paper wallet • virtual");LinearLayout pv=card(body);paperSummaryText=txt("",15,WHITE,true);add(pv,paperSummaryText);updateBotViews();line(pv,"Tidak mengubah saldo Exness.");}
   heading("Hedge engine");
   LinearLayout engine=card(body);labelValue(engine,"Execution","PAPER / "+botStatus,TEAL);line(engine,"Bot berjalan dengan tick Exness; order virtual terpisah dari transaksi akun.");gap(engine,8);add(engine,action("Buka kontrol bot",false,()->{tab=2;showShell();}));
  }
@@ -139,7 +141,7 @@ public class MainActivity extends Activity {
   line(chart,preview?"Teal: equity  •  Ungu: balance (contoh)":"Grafik historis equity belum tersedia. Close deal dapat dibaca di History.");
   LinearLayout r=row();metric(r,"Win rate",preview?"66.7%":"—",TEAL,false);metric(r,"Realized PnL",preview?"+1.45":"—",TEAL,true);add(body,r);gap(body,10);
   LinearLayout dist=card(body);add(dist,txt("Trade distribution",16,WHITE,true));ChartView donut=new ChartView(preview,true);donut.setContentDescription(preview?"Contoh distribusi, empat profit dan dua loss":"Distribusi belum tersedia");dist.addView(donut,new LinearLayout.LayoutParams(-1,dp(150)));line(dist,preview?"Contoh: 4 profit • 2 loss":"Distribusi lengkap belum dihitung. Close deal tersedia di History.");
-  if(!preview&&paper!=null){LinearLayout pv=card(body);add(pv,txt("Paper performance • virtual USD",16,WHITE,true));gap(pv,8);labelValue(pv,"Balance virtual",usd(paper.balance),WHITE);labelValue(pv,"Realized PnL",usd(paper.balance-paper.initial),TEAL);labelValue(pv,"Closed positions",String.valueOf(paper.closed.size()),WHITE);add(pv,action("Buka history paper",false,()->{paperHistory=true;tab=3;showShell();}));}
+  if(!preview&&paper!=null){LinearLayout pv=card(body);add(pv,txt("Paper performance • virtual USD",16,WHITE,true));gap(pv,8);paperSummaryText=txt("",15,WHITE,true);add(pv,paperSummaryText);updateBotViews();add(pv,action("Buka history paper",false,()->{paperHistory=true;tab=3;showShell();}));}
   LinearLayout current=card(body);add(current,txt("Broker snapshot",16,WHITE,true));gap(current,8);labelValue(current,"Balance",val("128.50",snapshot==null?null:snapshot.balance),WHITE);labelValue(current,"Equity",val("116.20",snapshot==null?null:snapshot.equity),TEAL);add(current,action("Refresh saldo",false,()->refresh()));
  }
  private void bot(){
@@ -148,16 +150,19 @@ public class MainActivity extends Activity {
   line(c,"PAPER EXECUTION • tick Exness. Order riil belum diaktifkan.");
   gap(c,10);LinearLayout controls=row();weighted(controls,action("START BOT",true,()->startBot()),false);weighted(controls,action("STOP BOT",false,()->stopBot("STOPPED",false)),true);add(c,controls);
   gap(c,8);add(c,action("EMERGENCY CLOSE ALL (PAPER)",false,()->emergencyPaper()));
-  LinearLayout p=card(body);add(p,txt("Active strategy",17,WHITE,true));gap(p,12);labelValue(p,"Strategy","Adaptive hedge • EMA tick 9/21",TEAL);labelValue(p,"Instrument",paperSymbol.isEmpty()?(preferredSymbol.isEmpty()?"XAUUSD / auto suffix":preferredSymbol):paperSymbol,WHITE);gap(p,6);add(p,action("Pilih simbol XAUUSD",false,()->selectSymbol()));labelValue(p,"Volume","0.01 lot",WHITE);labelValue(p,"Profit target",paper!=null&&!paperFeeKnown?"$1 gross / posisi":"$1 / posisi (estimasi)",TEAL);line(p,"Komisi: "+paperFeeDescription);labelValue(p,"Entry cooldown","30 detik",WHITE);labelValue(p,"Position cap","5",WHITE);labelValue(p,"Drawdown guard","15%",RED);line(p,"Modal virtual $100; margin asumsi $5/posisi; biaya hanya jika model tersedia. Tidak termasuk swap, slippage atau stop-out broker.");line(p,"Engine hanya saat APK aktif; Stop membekukan entry dan close otomatis. Riwayat dan saldo virtual disimpan lokal. Tidak ada order Exness.");
+  LinearLayout p=card(body);add(p,txt("Active strategy",17,WHITE,true));gap(p,12);labelValue(p,"Strategy","Adaptive hedge • EMA tick 9/21",TEAL);botSymbolText=txt("",14,WHITE,true);add(p,botSymbolText);gap(p,6);add(p,action("Pilih simbol XAUUSD",false,()->selectSymbol()));labelValue(p,"Volume","0.01 lot",WHITE);labelValue(p,"Profit target",paper!=null&&!paperFeeKnown?"$1 gross / posisi":"$1 / posisi (estimasi)",TEAL);botFeeText=txt("",13,MUTED,false);add(p,botFeeText);labelValue(p,"Entry cooldown","30 detik",WHITE);labelValue(p,"Position cap","5",WHITE);labelValue(p,"Drawdown guard","15%",RED);line(p,"Modal virtual $100; margin asumsi $5/posisi; biaya hanya jika model tersedia. Tidak termasuk swap, slippage atau stop-out broker.");line(p,"Engine hanya saat APK aktif; Stop membekukan entry dan close otomatis. Riwayat dan saldo virtual disimpan lokal. Tidak ada order Exness.");
   LinearLayout v=card(body);add(v,txt("Paper trading • saldo virtual USD",17,WHITE,true));gap(v,8);
   botLiveText=txt("",14,WHITE,false);add(v,botLiveText);
   LinearLayout logs=card(body);add(logs,txt("Engine logs",16,WHITE,true));gap(logs,8);
-  botLogText=txt("",13,MUTED,false);botLogText.setTextIsSelectable(true);add(logs,botLogText);
+  botLogText=txt("",13,MUTED,false);botLogText.setTextIsSelectable(true);botLogText.setFocusableInTouchMode(false);add(logs,botLogText);
   updateBotViews();
  }
  private String usd(double value){return String.format(Locale.US,"$%.2f",value);}
  private void updateBotViews(){
   if(botStateText!=null)botStateText.setText("ENGINE • "+botStatus);
+  if(botSymbolText!=null)botSymbolText.setText("Instrument: "+(paperSymbol.isEmpty()?(preferredSymbol.isEmpty()?"XAUUSD / auto suffix":preferredSymbol):paperSymbol));
+  if(botFeeText!=null)botFeeText.setText("Komisi: "+paperFeeDescription);
+  if(paperSummaryText!=null&&paper!=null)paperSummaryText.setText("Balance virtual: "+usd(paper.balance)+"\nRealized PnL: "+usd(paper.balance-paper.initial)+"\nOpen / Closed: "+paper.open.size()+" / "+paper.closed.size());
   if(botLiveText!=null){
    if(paper==null)botLiveText.setText("Belum ada sesi paper. Start tidak mengirim order broker.");
    else{
@@ -172,11 +177,11 @@ public class MainActivity extends Activity {
   if(botLogText!=null){String value=botLogs.isEmpty()?"Tekan START BOT untuk memulai koneksi tick.":android.text.TextUtils.join("\n",botLogs);if(!value.contentEquals(botLogText.getText()))botLogText.setText(value);}
  }
  private void logBot(String message){if(botLogs.size()>=100)botLogs.removeFirst();botLogs.addLast(new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.US).format(new java.util.Date())+"  "+message);}
- private void renderBot(){if(tab==2&&!isDestroyed()&&!isFinishing())updateBotViews();}
+ private void renderBot(){if(!isDestroyed()&&!isFinishing())updateBotViews();}
  private void selectSymbol(){
   if(botStarting||(paper!=null&&(paper.running||!paper.open.isEmpty()))){Toast.makeText(this,"Stop dan tutup sesi paper sebelum mengubah simbol.",Toast.LENGTH_LONG).show();return;}
   EditText input=new EditText(this);input.setText(preferredSymbol);input.setHint("Kosong = auto; contoh XAUUSDm");
-  new AlertDialog.Builder(this).setTitle("Simbol XAUUSD").setMessage("Gunakan nama yang tersedia di akun Exness. Mengganti simbol mereset sesi paper lokal yang sudah ditutup.").setView(input).setNegativeButton("Batal",null).setPositiveButton("Simpan",(d,w)->{String v=input.getText().toString().trim();if(!v.isEmpty()&&!v.matches("XAUUSD[a-z0-9._-]{0,5}")){Toast.makeText(this,"Format simbol tidak valid",Toast.LENGTH_SHORT).show();return;}stopBot("STOPPED",true);preferredSymbol=v;prefs.edit().putString("paper_symbol",v).apply();String key=paperKey();if(key!=null)prefs.edit().remove(key).apply();paper=null;paperSymbol="";paperFeeDescription="Belum diperiksa";persistedOwner="";showShell();}).show();
+  new AlertDialog.Builder(this).setTitle("Simbol XAUUSD").setMessage("Gunakan nama yang tersedia di akun Exness. Mengganti simbol mengarsipkan sesi yang sudah ditutup dan memulai wallet virtual baru; arsip belum ditampilkan.").setView(input).setNegativeButton("Batal",null).setPositiveButton("Simpan",(d,w)->{String v=input.getText().toString().trim();if(!v.isEmpty()&&!v.matches("XAUUSD[a-z0-9._-]{0,5}")){Toast.makeText(this,"Format simbol tidak valid",Toast.LENGTH_SHORT).show();return;}stopBot("STOPPED",true);preferredSymbol=v;prefs.edit().putString("paper_symbol",v).apply();String key=paperKey();if(key!=null){String saved=prefs.getString(key,null);if(saved!=null)prefs.edit().putString(key+"_archive_"+System.currentTimeMillis(),saved).remove(key).apply();}paper=null;paperSymbol="";paperFeeDescription="Belum diperiksa";persistedOwner="";showShell();}).show();
  }
  private String optionalText(JSONObject j,String name){Object raw=j==null?null:j.opt(name);return raw instanceof String?(String)raw:null;}
  private void preflightLog(int run,String message){handler.post(()->{if(run==botGeneration&&botStarting&&!isDestroyed()){logBot(message);renderBot();}});}
@@ -274,13 +279,14 @@ public class MainActivity extends Activity {
  private String paperKey(){return client==null?null:"paper_session_"+client.account+"_"+Integer.toHexString(client.gateway.hashCode());}
  private void persistPaper(boolean force){
   String key=paperKey();if(paper==null||key==null)return;
-  if(!force&&key.equals(persistedOwner)&&persistedOpen==paper.open.size()&&persistedClosed==paper.closed.size()&&persistedClosed<500)return;
+  long lastClose=paper.closed.isEmpty()?0:paper.closed.get(paper.closed.size()-1).time;
+  if(!force&&key.equals(persistedOwner)&&persistedOpen==paper.open.size()&&persistedClosed==paper.closed.size()&&persistedLastClose==lastClose)return;
   try{
    org.json.JSONObject j=new org.json.JSONObject().put("symbol",paperSymbol).put("known",paperFeeKnown).put("feeDescription",paperFeeDescription).put("units",paper.units).put("fee",paper.fee).put("balance",paper.balance).put("peak",paper.peak).put("halted",paper.halted).put("lastEntry",paper.lastEntry);
    JSONArray op=new JSONArray(),cl=new JSONArray();
    for(PaperHedge.Position p:paper.open)op.put(new JSONObject().put("buy",p.buy).put("entry",p.entry).put("time",p.time));
    for(int i=Math.max(0,paper.closed.size()-500);i<paper.closed.size();i++){PaperHedge.Closed c=paper.closed.get(i);cl.put(new JSONObject().put("buy",c.position.buy).put("entry",c.position.entry).put("entryTime",c.position.time).put("exit",c.exit).put("pnl",c.pnl).put("time",c.time));}
-   j.put("open",op).put("closed",cl);prefs.edit().putString(key,j.toString()).apply();persistedOwner=key;persistedOpen=paper.open.size();persistedClosed=paper.closed.size();
+   j.put("open",op).put("closed",cl);prefs.edit().putString(key,j.toString()).apply();persistedOwner=key;persistedOpen=paper.open.size();persistedClosed=paper.closed.size();persistedLastClose=lastClose;
   }catch(Exception e){logBot("PAPER STORAGE FAILED");}
  }
  private void restorePaper(){
@@ -290,7 +296,7 @@ public class MainActivity extends Activity {
    JSONArray op=j.getJSONArray("open"),cl=j.getJSONArray("closed");if(op.length()>5||cl.length()>500)throw new Exception();
    for(int i=0;i<op.length();i++){JSONObject x=op.getJSONObject(i);p.open.add(new PaperHedge.Position(x.getBoolean("buy"),x.getDouble("entry"),x.getLong("time")));}
    for(int i=0;i<cl.length();i++){JSONObject x=cl.getJSONObject(i);p.closed.add(new PaperHedge.Closed(new PaperHedge.Position(x.getBoolean("buy"),x.getDouble("entry"),x.getLong("entryTime")),x.getDouble("exit"),x.getDouble("pnl"),x.getLong("time")));}
-   paperSymbol=j.getString("symbol");paperFeeKnown=j.getBoolean("known");paperFeeDescription=j.getString("feeDescription");paper=p;persistedOwner=key;persistedOpen=p.open.size();persistedClosed=p.closed.size();botStatus="STOPPED / RESTORED";logBot("Sesi paper lokal dipulihkan; Start untuk lanjut.");
+   paperSymbol=j.getString("symbol");paperFeeKnown=j.getBoolean("known");paperFeeDescription=j.getString("feeDescription");paper=p;persistedOwner=key;persistedOpen=p.open.size();persistedClosed=p.closed.size();persistedLastClose=p.closed.isEmpty()?0:p.closed.get(p.closed.size()-1).time;botStatus="STOPPED / RESTORED";logBot("Sesi paper lokal dipulihkan; Start untuk lanjut.");
   }catch(Exception e){logBot("PAPER RESTORE FAILED");}
  }
  private void settings(){
