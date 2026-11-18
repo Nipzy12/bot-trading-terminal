@@ -74,8 +74,10 @@ final class ExnessClient {
  private synchronized String access()throws Exception{
   if(access==null){JSONObject j=request(gateway,"GET","/v1/trading/access-point?account_id="+account,null,"");if(!account.equals(j.getString("account_id")))throw new Exception("ACCOUNT_MISMATCH");access=origin(j.getString("access_point"));}return access;
  }
- okhttp3.Request tickRequest()throws Exception{
-  String host=access(),path="/v1/server-events/accounts/"+account+"/ws/ticks";
+ okhttp3.Request tickRequest()throws Exception{return streamRequest("ticks");}
+ okhttp3.Request streamRequest(String kind)throws Exception{
+  if(!"ticks".equals(kind)&&!"events".equals(kind))throw new IllegalArgumentException("INVALID_STREAM");
+  String host=access(),path="/v1/server-events/accounts/"+account+"/ws/"+kind;
   long ts=System.currentTimeMillis();
   JSONObject data=new JSONObject().put("api_key",key).put("idempotency_key","").put("timestamp",ts).put("sign_version",1).put("method","GET").put("path",path).put("body_hash",b64(MessageDigest.getInstance("SHA-256").digest(new byte[0])));
   byte[] bytes=data.toString().getBytes(StandardCharsets.UTF_8);
@@ -89,7 +91,7 @@ final class ExnessClient {
  JSONObject snapshot()throws Exception{return get("/v1/trading/accounts/"+account+"/snapshot");}
  JSONObject limits()throws Exception{return get("/v1/configuration/accounts/"+account+"/limits");}
  JSONObject deals(String query)throws Exception{return get("/v1/history/accounts/"+account+"/deals?"+query);}
- // Transport primitives only: intentionally not connected to UI or autonomous loop.
+ // Trading transport: caller must journal and reconcile before sending another order.
  // Caller must validate symbol conditions, margin, fresh prices, permissions, and persist/reconcile the operation.
  JSONObject openPosition(String instrument,String side,String volume,String idempotency)throws Exception{
   if(!instrument.matches("[A-Za-z0-9._-]{1,11}")||!side.matches("buy|sell")||!volume.matches("[0-9]+(\\.[0-9]+)?")||new java.math.BigDecimal(volume).signum()<=0||!idempotency.matches("[A-Za-z0-9._~-]{5,128}"))throw new Exception("INVALID_ORDER");
