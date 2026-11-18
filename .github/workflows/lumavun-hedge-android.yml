@@ -106,14 +106,3 @@ jobs:
           name: LUMAVUN-Hedge-signed
           path: dist/LUMAVUN-Hedge.apk
           if-no-files-found: error
-\n'*}"
-          [[ "$badging" == *"name='com.lumavun.hedge'"* ]]
-          code="$(printf '%s\n' "$badging" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
-          [[ "$code" =~ ^[0-9]+$ ]] && (( code >= 6 ))
-          printf 'Verified release: %s\nCertificate SHA-256: %s\n' "$badging" "$signed"
-      - uses: actions/upload-artifact@v4
-        if: github.ref == 'refs/heads/feat/lumavun-hedge-apk'
-        with:
-          name: LUMAVUN-Hedge-signed
-          path: dist/LUMAVUN-Hedge.apk
-          if-no-files-found: error
