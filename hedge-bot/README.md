@@ -1,0 +1,7 @@
+# LUMAVUN Hedge Bot — v0.1
+Isolated prototype. No broker orders, no transfer permissions, no background worker. Existing terminal remains paper-only.
+- hedge.mjs: pure decision function consuming validated quote, signal, equity and position net PnL. Emits close/open intents; never places orders. Positive target closes winners; losers remain unless emergency equity drawdown; opposite signal may open paper exposure. Position cap, grid spacing, spread and cooldown apply. Caller must enforce provider identity, mark-to-market, margin, configuration validation, execution reconciliation and an emergency latch. Inputs are not broker verified.
+- Android app wraps the existing authenticated production terminal; it does not expose Exness signing keys to native code. Account -> select verified Exness account -> Terminal -> Refresh saldo broker. Existing web UI's trade history is paper history, not official broker deal history. Existing NEXUS bot is not wired to this new decision function. Google popup may not work inside WebView; use existing NEXUS login.
+- Local engine checks: node --test hedge-bot/hedge.test.mjs
+- Android: cd android-hedge && gradle :app:assembleDebug (JDK 17, Gradle 8.9, SDK 35).
+- Live trading, cloud runner, signed official deal history and real account reconciliation require verified API contracts/eligibility, risk review, deployment and owner demo validation. Do not enter signing secrets into GitHub or chat.
