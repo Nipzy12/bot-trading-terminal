@@ -95,7 +95,7 @@ jobs:
           [[ "$signed" == "$EXPECTED_CERT_SHA256" ]]
           "$tools/zipalign" -c -P 16 4 dist/LUMAVUN-Hedge.apk
           badging="$("$tools/aapt" dump badging dist/LUMAVUN-Hedge.apk)"
-          badging="${badging%%
+          IFS= read -r badging <<< "$badging"
           [[ "$badging" == *"name='com.lumavun.hedge'"* ]]
           code="$(printf '%s\n' "$badging" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
           [[ "$code" =~ ^[0-9]+$ ]] && (( code >= 6 ))
