@@ -104,7 +104,7 @@ public class MainActivity extends Activity {
  private void metric(LinearLayout r,String label,String value,int color,boolean right){LinearLayout c=column();c.setBackground(bg(PANEL,BORDER,13));c.setPadding(dp(12),dp(12),dp(12),dp(12));add(c,txt(label,12,MUTED,false));gap(c,7);add(c,txt(value,value.length()>15?14:21,color,true));weighted(r,c,right);}
  private void dashboard(){
   add(body,txt("Analytics & Dashboard",25,WHITE,true));gap(body,13);
-  LinearLayout chart=card(body);add(chart,txt(preview?"Contoh grafik equity & balance":"Equity & balance history",16,WHITE,true));gap(chart,8);
+  LinearLayout chart=card(body);add(chart,txt(preview?"Contoh grafik equity & balance (ilustrasi terpisah)":"Equity & balance history",16,WHITE,true));gap(chart,8);
   ChartView graph=new ChartView(preview,false);graph.setContentDescription(preview?"Contoh grafik equity dan balance, bukan data broker":"Riwayat equity belum tersedia");chart.addView(graph,new LinearLayout.LayoutParams(-1,dp(180)));
   line(chart,preview?"Teal: equity  •  Ungu: balance (contoh)":"Riwayat broker belum terintegrasi. Tidak ada grafik sintetis di mode akun.");
   LinearLayout r=row();metric(r,"Win rate",preview?"66.7%":"—",TEAL,false);metric(r,"Realized PnL",preview?"+1.45":"—",TEAL,true);add(body,r);gap(body,10);
@@ -122,7 +122,7 @@ public class MainActivity extends Activity {
   LinearLayout filters=row();String[] names={"All","Profit","Loss"};for(int i=0;i<3;i++){final int n=i;TextView t=action(names[i],filter==i,()->{filter=n;showShell();});if(i==0)weighted(filters,t,false);else weighted(filters,t,true);}add(body,filters);gap(body,12);
   LinearLayout total=card(body);add(total,txt("Total realized PnL",13,MUTED,false));add(total,txt(preview?"+1.45":"—",27,TEAL,true));line(total,preview?"Contoh riwayat • USD":"Riwayat broker belum terhubung");
   if(preview){for(int i=0;i<demoPnl.length;i++){double p=demoPnl[i];if((filter==1&&p<0)||(filter==2&&p>=0))continue;LinearLayout trade=card(body);labelValue(trade,"Contoh #"+(i+1)+" • "+demoSides[i],String.format(Locale.US,"%+.2f USD",p),p>=0?TEAL:RED);line(trade,"Simulasi ilustratif • bukan transaksi Exness");}}
-  else{LinearLayout empty=card(body);add(empty,txt("Belum ada data history broker",18,WHITE,true));gap(empty,8);line(empty,"Riwayat paper yang sudah ada tetap dapat dilihat di terminal. Tidak dicampur dengan transaksi broker.");gap(empty,12);add(empty,action("Buka riwayat paper",false,()->openWeb("/?feed=live")));}
+  else{LinearLayout empty=card(body);add(empty,txt("Belum ada data history broker",18,WHITE,true));gap(empty,8);line(empty,"Riwayat paper yang sudah ada tetap dapat dilihat di terminal. Tidak dicampur dengan transaksi broker.");gap(empty,12);add(empty,action("Buka terminal paper",false,()->openWeb("/?feed=live")));}
  }
  private void settings(){
   add(body,txt("System Settings",25,WHITE,true));gap(body,13);
@@ -132,14 +132,14 @@ public class MainActivity extends Activity {
   LinearLayout about=card(body);add(about,txt("About LUMAVUN Hedge",16,WHITE,true));gap(about,7);line(about,"Version 0.2 • Native Android UI");line(about,"No native broker orders • no cloud worker");
  }
  private void refresh(){
-  if(preview){status="Preview desain aktif.";return;}
+  if(preview){Toast.makeText(this,"Nonaktifkan preview di Settings untuk membaca saldo akun.",Toast.LENGTH_SHORT).show();return;}
   if(busy)return;if(System.currentTimeMillis()<cooldown){status="Cooldown refresh. Coba kembali setelah batas waktu.";showShell();return;}
   String cookie=CookieManager.getInstance().getCookie(ORIGIN+"/api/account/monitor");
   if(cookie==null||cookie.isEmpty()){snapshot=null;status="Masuk dan pilih akun melalui Akun Exness.";showShell();return;}
   busy=true;snapshot=null;status="Memuat snapshot akun…";int ticket=++generation;showShell();
   new Thread(()->{Snapshot result=null;String message="Snapshot tidak tersedia. Periksa koneksi serta akun terpilih.";long retry=0;HttpsURLConnection conn=null;
    try{conn=(HttpsURLConnection)new URL(ORIGIN+"/api/account/monitor").openConnection();conn.setInstanceFollowRedirects(false);conn.setConnectTimeout(8000);conn.setReadTimeout(8000);conn.setRequestMethod("GET");conn.setRequestProperty("Accept","application/json");conn.setRequestProperty("Cache-Control","no-store");conn.setRequestProperty("Cookie",cookie);
-    int code=conn.getResponseCode();if(code==200){try(InputStream in=conn.getInputStream();ByteArrayOutputStream bytes=new ByteArrayOutputStream()){byte[] chunk=new byte[1024];int n;while((n=in.read(chunk))!=-1){if(bytes.size()+n>16384)throw new IOException();bytes.write(chunk,0,n);}result=new Snapshot(new JSONObject(bytes.toString("UTF-8")));message="Snapshot Exness terverifikasi oleh respons API.";}}
+    int code=conn.getResponseCode();if(code==200){try(InputStream in=conn.getInputStream();ByteArrayOutputStream bytes=new ByteArrayOutputStream()){byte[] chunk=new byte[1024];int n;while((n=in.read(chunk))!=-1){if(bytes.size()+n>16384)throw new IOException();bytes.write(chunk,0,n);}result=new Snapshot(new JSONObject(bytes.toString("UTF-8")));message="Snapshot API Exness diterima.";}}
     else if(code==401||code==409)message="Login atau pilih akun yang sudah terverifikasi di Akun Exness.";
     else if(code==429){message="Kuota Exness tercapai. Jangan refresh berulang.";String h=conn.getHeaderField("Retry-After");try{long sec=Long.parseLong(h);if(sec>0&&sec<=86400)retry=sec*1000;}catch(Exception ignored){retry=60000;}}
    }catch(Exception ignored){}finally{if(conn!=null)conn.disconnect();}
