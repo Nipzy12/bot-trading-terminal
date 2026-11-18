@@ -17,7 +17,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --test hedge-bot/hedge.test.mjs
+      - run: node --test hedge-bot/hedge.check.mjs
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
