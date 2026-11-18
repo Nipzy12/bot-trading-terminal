@@ -135,7 +135,7 @@ public class MainActivity extends Activity {
   line(c,"PAPER EXECUTION • tick Exness. Order riil belum diaktifkan.");
   gap(c,10);LinearLayout controls=row();weighted(controls,action("START BOT",true,()->startBot()),false);weighted(controls,action("STOP BOT",false,()->stopBot("STOPPED",false)),true);add(c,controls);
   gap(c,8);add(c,action("EMERGENCY CLOSE ALL (PAPER)",false,()->emergencyPaper()));
-  LinearLayout p=card(body);add(p,txt("Active strategy",17,WHITE,true));gap(p,12);labelValue(p,"Strategy","Adaptive hedge • EMA tick 9/21",TEAL);labelValue(p,"Instrument",paperSymbol.isEmpty()?"XAUUSD / auto suffix":paperSymbol,WHITE);labelValue(p,"Volume","0.01 lot",WHITE);labelValue(p,"Profit target","$1 / posisi (estimasi)",TEAL);labelValue(p,"Entry cooldown","30 detik",WHITE);labelValue(p,"Position cap","5",WHITE);labelValue(p,"Drawdown guard","15%",RED);line(p,"Modal virtual $100; margin asumsi $5/posisi; biaya komisi estimasi. Tidak termasuk swap, slippage atau stop-out broker.");line(p,"Engine hanya saat APK aktif; Stop membekukan entry dan close otomatis.");
+  LinearLayout p=card(body);add(p,txt("Active strategy",17,WHITE,true));gap(p,12);labelValue(p,"Strategy","Adaptive hedge • EMA tick 9/21",TEAL);labelValue(p,"Instrument",paperSymbol.isEmpty()?"XAUUSD / auto suffix":paperSymbol,WHITE);labelValue(p,"Volume","0.01 lot",WHITE);labelValue(p,"Profit target","$1 / posisi (estimasi)",TEAL);labelValue(p,"Entry cooldown","30 detik",WHITE);labelValue(p,"Position cap","5",WHITE);labelValue(p,"Drawdown guard","15%",RED);line(p,"Modal virtual $100; margin asumsi $5/posisi; biaya komisi estimasi. Tidak termasuk swap, slippage atau stop-out broker.");line(p,"Engine hanya saat APK aktif; Stop membekukan entry dan close otomatis. Sesi virtual tersimpan di RAM, hilang jika proses APK mati.");
   if(paper!=null){
    LinearLayout v=card(body);add(v,txt("Virtual trading account",17,WHITE,true));gap(v,8);labelValue(v,"Balance",String.format(java.util.Locale.US,"$%.2f",paper.balance),WHITE);boolean fresh=paper.fresh(System.currentTimeMillis())&&ticks!=null;
    labelValue(v,"Equity",fresh?String.format(java.util.Locale.US,"$%.2f",paper.equity()):"—",WHITE);labelValue(v,"Floating PnL",fresh?String.format(java.util.Locale.US,"%+.2f",paper.floating()):"—",TEAL);labelValue(v,"Open / Closed",paper.open.size()+" / "+paper.closed.size(),WHITE);
@@ -149,8 +149,8 @@ public class MainActivity extends Activity {
  private void startBot(){
   if(preview){Toast.makeText(this,"Matikan preview untuk memakai tick Exness.",Toast.LENGTH_SHORT).show();return;}
   if(client==null){connectDialog();return;}if(busy||botStarting||(paper!=null&&paper.running))return;
-  if(paper!=null&&paper.halted){Toast.makeText(this,"Emergency latch aktif. Sesi paper tidak bisa di-restart.",Toast.LENGTH_LONG).show();return;}
-  if(paper!=null&&ticks!=null&&paper.fresh(System.currentTimeMillis())){paper.start();botStatus="WAITING FOR TICKS";logBot("PAPER START");renderBot();return;}
+  if(paper!=null&&paper.halted&&paper.open.isEmpty()){Toast.makeText(this,"Emergency latch aktif. Sesi paper telah dihentikan.",Toast.LENGTH_LONG).show();return;}
+  if(paper!=null&&ticks!=null&&paper.fresh(System.currentTimeMillis())){if(paper.halted){paper.emergency(System.currentTimeMillis());botStatus="EMERGENCY CLOSED";renderBot();return;}paper.start();botStatus="WAITING FOR TICKS";logBot("PAPER START");renderBot();return;}
   if(System.currentTimeMillis()<cooldown){Toast.makeText(this,"Cooldown API aktif.",Toast.LENGTH_SHORT).show();return;}
   final int run=++botGeneration;final ExnessClient current=client;botStarting=true;botStartTime=System.currentTimeMillis();botStatus="CONNECTING";logBot("Memeriksa akun dan simbol");renderBot();
   new Thread(()->{
@@ -188,7 +188,7 @@ public class MainActivity extends Activity {
         final double bid=j.getDouble("bid"),ask=j.getDouble("ask");final long ts=java.time.OffsetDateTime.parse(j.getString("timestamp")).toInstant().toEpochMilli();
         handler.post(()->{if(run!=botGeneration||ticks!=w||current!=client||paper==null)return;
          String prev=paper.note;String result=paper.tick(bid,ask,ts,System.currentTimeMillis());if(result.equals("INVALID_OR_STALE"))return;
-         if(paper.running)botStatus="RUNNING / PAPER";else if(paper.halted)botStatus="EMERGENCY";
+         if(paper.halted&&!paper.open.isEmpty())paper.emergency(System.currentTimeMillis());if(paper.running)botStatus="RUNNING / PAPER";else if(paper.halted)botStatus="EMERGENCY";
          if(!prev.equals(result)&&(result.startsWith("PAPER ")||result.equals("HARVEST")||result.startsWith("EMERGENCY")))logBot(result);
          long now=System.currentTimeMillis();if(now-lastBotPaint>=1000){lastBotPaint=now;renderBot();}
         });
@@ -225,7 +225,7 @@ public class MainActivity extends Activity {
   LinearLayout c=card(body);add(c,txt("Exness account",17,WHITE,true));gap(c,8);line(c,client==null?"API belum tersambung. Tidak perlu login LUMAVUN.":"API lokal tersimpan • akun "+client.account);gap(c,10);add(c,action("Sambungkan API Exness",true,()->connectDialog()));gap(c,8);add(c,action("Hapus koneksi lokal",false,()->disconnect()));
   LinearLayout p=card(body);add(p,txt("Risk management",17,WHITE,true));gap(p,10);labelValue(p,"Individual take profit","$1 (rancangan)",TEAL);labelValue(p,"Emergency drawdown","15% (rancangan)",RED);labelValue(p,"Martingale","Nonaktif",MUTED);line(p,"Pengaturan engine native belum diterapkan pada transaksi.");
   LinearLayout d=card(body);add(d,txt("Appearance",17,WHITE,true));gap(d,8);labelValue(d,"Theme","Midnight / teal",TEAL);Switch sw=new Switch(this);sw.setText("Preview desain (data contoh)");sw.setTextColor(WHITE);sw.setTextSize(14);sw.setMinHeight(dp(48));sw.setChecked(preview);sw.setOnCheckedChangeListener((b,checked)->{stopBot("STOPPED",true);preview=checked;snapshot=null;generation++;busy=false;prefs.edit().putBoolean("preview",preview).apply();showShell();});add(d,sw);
-  LinearLayout about=card(body);add(about,txt("About LUMAVUN Hedge",16,WHITE,true));gap(about,7);line(about,"Version 0.3 • Standalone Android");line(about,"Direct signed REST • execution locked");
+  LinearLayout about=card(body);add(about,txt("About LUMAVUN Hedge",16,WHITE,true));gap(about,7);line(about,"Version 0.4 • Standalone Android");line(about,"Direct signed REST & ticks • paper execution");
  }
  private void connectDialog(){
   if(busy)return;if(paper!=null&&!paper.open.isEmpty()){Toast.makeText(this,"Tutup posisi paper melalui emergency sebelum mengganti akun.",Toast.LENGTH_LONG).show();return;}stopBot("STOPPED",true);paper=null;paperSymbol="";
