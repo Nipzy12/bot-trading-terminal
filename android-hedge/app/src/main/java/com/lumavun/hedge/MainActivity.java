@@ -12,7 +12,7 @@ import android.view.*;
 import android.webkit.*;
 import android.widget.*;
 import java.io.*;
-import java.net.*;
+import java.net.URL;
 import javax.net.ssl.HttpsURLConnection;
 import java.math.BigDecimal;
 import java.text.DecimalFormat;
@@ -134,7 +134,7 @@ public class MainActivity extends Activity {
  private void refresh(){
   if(preview){Toast.makeText(this,"Nonaktifkan preview di Settings untuk membaca saldo akun.",Toast.LENGTH_SHORT).show();return;}
   if(busy)return;if(System.currentTimeMillis()<cooldown){status="Cooldown refresh. Coba kembali setelah batas waktu.";showShell();return;}
-  String cookie=CookieManager.getInstance().getCookie(ORIGIN+"/api/account/monitor");
+  String cookie=android.webkit.CookieManager.getInstance().getCookie(ORIGIN+"/api/account/monitor");
   if(cookie==null||cookie.isEmpty()){snapshot=null;status="Masuk dan pilih akun melalui Akun Exness.";showShell();return;}
   busy=true;snapshot=null;status="Memuat snapshot akun…";int ticket=++generation;showShell();
   new Thread(()->{Snapshot result=null;String message="Snapshot tidak tersedia. Periksa koneksi serta akun terpilih.";long retry=0;HttpsURLConnection conn=null;
@@ -152,7 +152,7 @@ public class MainActivity extends Activity {
   generation++;snapshot=null;busy=false;status="Refresh untuk membaca akun terpilih.";browserOpen=true;root.removeAllViews();browser=column();
   LinearLayout h=row();h.setPadding(dp(12),dp(8),dp(12),dp(8));h.addView(action("Kembali",false,()->closeWeb()));TextView title=txt("  Exness terminal",18,WHITE,true);h.addView(title,new LinearLayout.LayoutParams(0,-2,1));add(browser,h);
   web=new WebView(this);WebSettings s=web.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);s.setSupportMultipleWindows(false);s.setJavaScriptCanOpenWindowsAutomatically(false);
-  CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(web,false);WebView.setWebContentsDebuggingEnabled(false);
+  android.webkit.CookieManager.getInstance().setAcceptCookie(true);android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(web,false);WebView.setWebContentsDebuggingEnabled(false);
   web.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest req){return !allowed(req.getUrl());}});
   browser.addView(web,new LinearLayout.LayoutParams(-1,0,1));root.addView(browser,new LinearLayout.LayoutParams(-1,-1));web.loadUrl(ORIGIN+path);
  }
