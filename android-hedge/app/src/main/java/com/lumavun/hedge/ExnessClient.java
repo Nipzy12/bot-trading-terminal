@@ -69,6 +69,16 @@ final class ExnessClient {
  private synchronized String access()throws Exception{
   if(access==null){JSONObject j=request(gateway,"GET","/v1/trading/access-point?account_id="+account,null,"");if(!account.equals(j.getString("account_id")))throw new Exception("ACCOUNT_MISMATCH");access=origin(j.getString("access_point"));}return access;
  }
+ okhttp3.Request tickRequest()throws Exception{
+  String host=access(),path="/v1/server-events/accounts/"+account+"/ws/ticks";
+  long ts=System.currentTimeMillis();
+  JSONObject data=new JSONObject().put("api_key",key).put("idempotency_key","").put("timestamp",ts).put("sign_version",1).put("method","GET").put("path",path).put("body_hash",b64(MessageDigest.getInstance("SHA-256").digest(new byte[0])));
+  byte[] bytes=data.toString().getBytes(StandardCharsets.UTF_8);
+  Ed25519Signer signer=new Ed25519Signer();signer.init(true,signing);signer.update(bytes,0,bytes.length);
+  return new okhttp3.Request.Builder().url("wss://"+host.substring(8)+path).header("Sec-WebSocket-Protocol","exness-ws-protocol").header("EXN-API-KEY",key).header("EXN-IDEMPOTENCY-KEY","").header("EXN-TIMESTAMP",Long.toString(ts)).header("EXN-SIGN-VERSION","1").header("EXN-DATA",b64(bytes)).header("EXN-SIGN",b64(signer.generateSignature())).build();
+ }
+ JSONObject instruments()throws Exception{return get("/v1/configuration/accounts/"+account+"/instruments");}
+ JSONObject conditions(String symbol)throws Exception{if(!symbol.matches("[A-Za-z0-9._-]{1,11}"))throw new Exception("INVALID_SYMBOL");return get("/v1/configuration/accounts/"+account+"/instruments/"+symbol+"/conditions");}
  JSONObject get(String path)throws Exception{return request(access(),"GET",path,null,"");}
  JSONObject details()throws Exception{JSONObject j=get("/v1/configuration/accounts/"+account+"/account");if(!account.equals(j.getString("account_id")))throw new Exception("ACCOUNT_MISMATCH");return j.getJSONObject("settings");}
  JSONObject snapshot()throws Exception{return get("/v1/trading/accounts/"+account+"/snapshot");}
