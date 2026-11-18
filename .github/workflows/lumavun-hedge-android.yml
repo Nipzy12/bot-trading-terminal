@@ -73,13 +73,14 @@ jobs:
                   raise ValueError()
               p = pathlib.Path(os.environ["SIGN_WORK"])
               (p / "release.p12").write_bytes(data)
-              (p / "password").write_text(password + "\n", encoding="utf-8")
+              (p / "store-password").write_text(password + "\n", encoding="utf-8")
+              (p / "key-password").write_text(password + "\n", encoding="utf-8")
           except Exception:
               raise SystemExit("Invalid signing bundle; no APK signed.")
           PY
           unset SIGNING_BUNDLE
           tools="$ANDROID_HOME/build-tools/35.0.0"
-          keytool -exportcert -alias lumavun-hedge -keystore "$work/release.p12" -storetype PKCS12 -storepass:file "$work/password" -file "$work/cert.der" >/dev/null
+          keytool -exportcert -alias lumavun-hedge -keystore "$work/release.p12" -storetype PKCS12 -storepass:file "$work/store-password" -file "$work/cert.der" >/dev/null
           actual="$(sha256sum "$work/cert.der" | cut -d' ' -f1)"
           if [[ "$actual" != "$EXPECTED_CERT_SHA256" ]]; then
             echo "::error::Permanent signing certificate does not match. Refusing to publish an incompatible update."
@@ -88,12 +89,24 @@ jobs:
           unsigned="android-hedge/app/build/outputs/apk/release/app-release-unsigned.apk"
           mkdir -p dist
           "$tools/zipalign" -f -P 16 4 "$unsigned" "$work/aligned.apk"
-          "$tools/apksigner" sign --ks "$work/release.p12" --ks-type PKCS12 --ks-key-alias lumavun-hedge --ks-pass "file:$work/password" --key-pass "file:$work/password" --out dist/LUMAVUN-Hedge.apk "$work/aligned.apk"
+          "$tools/apksigner" sign --ks "$work/release.p12" --ks-type PKCS12 --ks-key-alias lumavun-hedge --ks-pass "file:$work/store-password" --key-pass "file:$work/key-password" --out dist/LUMAVUN-Hedge.apk "$work/aligned.apk"
           report="$("$tools/apksigner" verify --verbose --print-certs dist/LUMAVUN-Hedge.apk)"
           signed="$(printf '%s\n' "$report" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
           [[ "$signed" == "$EXPECTED_CERT_SHA256" ]]
           "$tools/zipalign" -c -P 16 4 dist/LUMAVUN-Hedge.apk
-          badging="$("$tools/aapt" dump badging dist/LUMAVUN-Hedge.apk | head -n 1)"
+          badging="$("$tools/aapt" dump badging dist/LUMAVUN-Hedge.apk)"
+          badging="${badging%%
+          [[ "$badging" == *"name='com.lumavun.hedge'"* ]]
+          code="$(printf '%s\n' "$badging" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
+          [[ "$code" =~ ^[0-9]+$ ]] && (( code >= 6 ))
+          printf 'Verified release: %s\nCertificate SHA-256: %s\n' "$badging" "$signed"
+      - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/feat/lumavun-hedge-apk'
+        with:
+          name: LUMAVUN-Hedge-signed
+          path: dist/LUMAVUN-Hedge.apk
+          if-no-files-found: error
+\n'*}"
           [[ "$badging" == *"name='com.lumavun.hedge'"* ]]
           code="$(printf '%s\n' "$badging" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
           [[ "$code" =~ ^[0-9]+$ ]] && (( code >= 6 ))
