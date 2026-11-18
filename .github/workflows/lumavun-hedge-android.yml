@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -38,9 +40,62 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - run: gradle --no-daemon -p android-hedge :app:assembleDebug
+      - name: Build unsigned release
+        run: gradle --no-daemon -p android-hedge :app:assembleRelease
+      - name: Sign with permanent LUMAVUN key and verify certificate
+        if: github.ref == 'refs/heads/feat/lumavun-hedge-apk'
+        env:
+          SIGNING_BUNDLE: ${{ secrets.LUMAVUN_ANDROID_SIGNING_BUNDLE }}
+          EXPECTED_CERT_SHA256: '61a825e81c0713df4643c6f08ce76dc291ad2154b40e1c4b251d0b134a681b18'
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          if [[ -z "$SIGNING_BUNDLE" ]]; then
+            echo "::error::Missing LUMAVUN_ANDROID_SIGNING_BUNDLE. Add the permanent signing bundle as a repository Actions secret. No distributable APK was produced."
+            exit 1
+          fi
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          export SIGN_WORK="$work"
+          python3 - <<'PY'
+          import os, json, base64, pathlib
+          try:
+              value = json.loads(os.environ["SIGNING_BUNDLE"])
+              data = base64.b64decode(value["keystore_b64"], validate=True)
+              password = value["password"]
+              if not data or len(data) > 32768 or not isinstance(password, str) or not 20 <= len(password) <= 128 or not password.isascii() or any(c.isspace() for c in password):
+                  raise ValueError()
+              p = pathlib.Path(os.environ["SIGN_WORK"])
+              (p / "release.p12").write_bytes(data)
+              (p / "password").write_text(password + "\n", encoding="utf-8")
+          except Exception:
+              raise SystemExit("Invalid signing bundle; no APK signed.")
+          PY
+          unset SIGNING_BUNDLE
+          tools="$ANDROID_HOME/build-tools/35.0.0"
+          keytool -exportcert -alias lumavun-hedge -keystore "$work/release.p12" -storetype PKCS12 -storepass:file "$work/password" -file "$work/cert.der" >/dev/null
+          actual="$(sha256sum "$work/cert.der" | cut -d' ' -f1)"
+          if [[ "$actual" != "$EXPECTED_CERT_SHA256" ]]; then
+            echo "::error::Permanent signing certificate does not match. Refusing to publish an incompatible update."
+            exit 1
+          fi
+          unsigned="android-hedge/app/build/outputs/apk/release/app-release-unsigned.apk"
+          mkdir -p dist
+          "$tools/zipalign" -f -P 16 4 "$unsigned" "$work/aligned.apk"
+          "$tools/apksigner" sign --ks "$work/release.p12" --ks-type PKCS12 --ks-key-alias lumavun-hedge --ks-pass "file:$work/password" --key-pass "file:$work/password" --out dist/LUMAVUN-Hedge.apk "$work/aligned.apk"
+          report="$("$tools/apksigner" verify --verbose --print-certs dist/LUMAVUN-Hedge.apk)"
+          signed="$(printf '%s\n' "$report" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          [[ "$signed" == "$EXPECTED_CERT_SHA256" ]]
+          "$tools/zipalign" -c -P 16 4 dist/LUMAVUN-Hedge.apk
+          badging="$("$tools/aapt" dump badging dist/LUMAVUN-Hedge.apk | head -n 1)"
+          [[ "$badging" == *"name='com.lumavun.hedge'"* ]]
+          code="$(printf '%s\n' "$badging" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")"
+          [[ "$code" =~ ^[0-9]+$ ]] && (( code >= 6 ))
+          printf 'Verified release: %s\nCertificate SHA-256: %s\n' "$badging" "$signed"
       - uses: actions/upload-artifact@v4
+        if: github.ref == 'refs/heads/feat/lumavun-hedge-apk'
         with:
-          name: LUMAVUN-Hedge-debug
-          path: android-hedge/app/build/outputs/apk/debug/app-debug.apk
+          name: LUMAVUN-Hedge-signed
+          path: dist/LUMAVUN-Hedge.apk
           if-no-files-found: error
