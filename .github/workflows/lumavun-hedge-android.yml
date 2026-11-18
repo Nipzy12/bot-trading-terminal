@@ -34,6 +34,11 @@ jobs:
           mkdir -p /tmp/preflight-checks
           javac -d /tmp/preflight-checks android-hedge/app/src/main/java/com/lumavun/hedge/PreflightPolicy.java android-hedge/checks/PreflightChecks.java
           java -cp /tmp/preflight-checks com.lumavun.hedge.PreflightChecks
+      - name: Verify live trading rules
+        run: |
+          mkdir -p /tmp/live-checks
+          javac -d /tmp/live-checks android-hedge/app/src/main/java/com/lumavun/hedge/LiveRules.java android-hedge/checks/LiveRulesChecks.java
+          java -cp /tmp/live-checks com.lumavun.hedge.LiveRulesChecks
       - uses: android-actions/setup-android@v4
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
