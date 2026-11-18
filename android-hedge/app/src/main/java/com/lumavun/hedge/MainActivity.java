@@ -27,7 +27,7 @@ public class MainActivity extends Activity {
 
  private static final int BG=0xff090e19, PANEL=0xff13222f, BORDER=0xff344f60, WHITE=0xffeff7fa, MUTED=0xffa9bbc9, TEAL=0xff55f3c1, PURPLE=0xffa58bff, RED=0xffff8497;
  private static final String[] TABS={"Home","Dashboard","Bot","History","Settings"};
- private LinearLayout root, shell, body, nav, browser;
+ private LinearLayout root, shell, body, nav;
  private ExnessClient client;
  private ExnessClient.Vault vault;
  private JSONArray positions=new JSONArray(), deals=new JSONArray();
@@ -35,7 +35,7 @@ public class MainActivity extends Activity {
  private SharedPreferences prefs;
  private final Handler handler=new Handler(Looper.getMainLooper());
  private int tab=0, filter=0, generation=0;
- private boolean preview=false, busy=false, browserOpen=false;
+ private boolean preview=false, busy=false;
  private long cooldown=0;
  private Snapshot snapshot;
  private String status="Hubungkan akun Exness untuk melihat saldo.";
@@ -77,10 +77,10 @@ public class MainActivity extends Activity {
  private TextView action(String label,boolean primary,Runnable run){TextView t=txt(label,14,primary?BG:TEAL,true);t.setGravity(Gravity.CENTER);t.setPadding(dp(10),dp(10),dp(10),dp(10));t.setMinHeight(dp(48));t.setBackground(bg(primary?TEAL:0xff102b33,primary?0:0xff3b8b88,12));t.setClickable(true);t.setFocusable(true);t.setOnClickListener(v->run.run());return t;}
  private void labelValue(LinearLayout parent,String label,String value,int color){LinearLayout r=row();TextView a=txt(label,13,MUTED,false);r.addView(a,new LinearLayout.LayoutParams(0,-2,1));TextView b=txt(value,14,color,true);b.setGravity(Gravity.END);r.addView(b,new LinearLayout.LayoutParams(0,-2,1));add(parent,r);gap(parent,8);}
  private void showShell(){
-  browserOpen=false;root.removeAllViews();shell=column();shell.setBackgroundColor(BG);root.addView(shell,new LinearLayout.LayoutParams(-1,-1));
+  root.removeAllViews();shell=column();shell.setBackgroundColor(BG);root.addView(shell,new LinearLayout.LayoutParams(-1,-1));
   LinearLayout header=row();header.setPadding(dp(17),dp(12),dp(17),dp(10));
   LinearLayout mark=column();TextView name=txt("◈  LUMAVUN  HEDGE",20,WHITE,true);add(mark,name);add(mark,txt("DIRECT API  /  v0.3",11,TEAL,true));header.addView(mark,new LinearLayout.LayoutParams(0,-2,1));
-  TextView mode=txt(preview?"PREVIEW":client==null?"OFFLINE":"EXNESS",11,preview?PURPLE:TEAL,true);mode.setPadding(dp(10),dp(7),dp(10),dp(7));mode.setBackground(bg(PANEL,BORDER,10));header.addView(mode);add(shell,header);
+  TextView mode=txt(preview?"PREVIEW":snapshot!=null?"SNAPSHOT":client==null?"OFFLINE":"API SAVED",11,preview?PURPLE:TEAL,true);mode.setPadding(dp(10),dp(7),dp(10),dp(7));mode.setBackground(bg(PANEL,BORDER,10));header.addView(mode);add(shell,header);
   ScrollView scroll=new ScrollView(this);scroll.setFillViewport(true);body=column();body.setPadding(dp(16),dp(6),dp(16),dp(18));scroll.addView(body,new ScrollView.LayoutParams(-1,-2));shell.addView(scroll,new LinearLayout.LayoutParams(-1,0,1));
   nav=row();nav.setPadding(dp(3),dp(4),dp(3),dp(5));nav.setBackground(bg(0xff101c29,BORDER,0));
   for(int i=0;i<TABS.length;i++){final int ix=i;LinearLayout cell=column();cell.setGravity(Gravity.CENTER);cell.setPadding(0,dp(5),0,dp(5));cell.setMinimumHeight(dp(58));int color=i==tab?TEAL:MUTED;View icon=new NavIcon(i,color);cell.addView(icon,new LinearLayout.LayoutParams(dp(26),dp(26)));TextView cap=txt(TABS[i],11,color,i==tab);cap.setGravity(Gravity.CENTER);add(cell,cap);cell.setContentDescription(TABS[i]);cell.setSelected(i==tab);cell.setClickable(true);cell.setFocusable(true);cell.setOnClickListener(v->{tab=ix;showShell();});nav.addView(cell,new LinearLayout.LayoutParams(0,-2,1));}
@@ -113,9 +113,9 @@ public class MainActivity extends Activity {
   add(body,txt("Analytics & Dashboard",25,WHITE,true));gap(body,13);
   LinearLayout chart=card(body);add(chart,txt(preview?"Contoh grafik equity & balance (ilustrasi terpisah)":"Equity & balance history",16,WHITE,true));gap(chart,8);
   ChartView graph=new ChartView(preview,false);graph.setContentDescription(preview?"Contoh grafik equity dan balance, bukan data broker":"Riwayat equity belum tersedia");chart.addView(graph,new LinearLayout.LayoutParams(-1,dp(180)));
-  line(chart,preview?"Teal: equity  •  Ungu: balance (contoh)":"Riwayat broker belum terintegrasi. Tidak ada grafik sintetis di mode akun.");
+  line(chart,preview?"Teal: equity  •  Ungu: balance (contoh)":"Grafik historis equity belum tersedia. Close deal dapat dibaca di History.");
   LinearLayout r=row();metric(r,"Win rate",preview?"66.7%":"—",TEAL,false);metric(r,"Realized PnL",preview?"+1.45":"—",TEAL,true);add(body,r);gap(body,10);
-  LinearLayout dist=card(body);add(dist,txt("Trade distribution",16,WHITE,true));ChartView donut=new ChartView(preview,true);donut.setContentDescription(preview?"Contoh distribusi, empat profit dan dua loss":"Distribusi belum tersedia");dist.addView(donut,new LinearLayout.LayoutParams(-1,dp(150)));line(dist,preview?"Contoh: 4 profit • 2 loss":"Belum ada riwayat deal broker.");
+  LinearLayout dist=card(body);add(dist,txt("Trade distribution",16,WHITE,true));ChartView donut=new ChartView(preview,true);donut.setContentDescription(preview?"Contoh distribusi, empat profit dan dua loss":"Distribusi belum tersedia");dist.addView(donut,new LinearLayout.LayoutParams(-1,dp(150)));line(dist,preview?"Contoh: 4 profit • 2 loss":"Distribusi lengkap belum dihitung. Close deal tersedia di History.");
   LinearLayout current=card(body);add(current,txt("Broker snapshot",16,WHITE,true));gap(current,8);labelValue(current,"Balance",val("128.50",snapshot==null?null:snapshot.balance),WHITE);labelValue(current,"Equity",val("116.20",snapshot==null?null:snapshot.equity),TEAL);add(current,action("Refresh saldo",false,()->refresh()));
  }
  private void bot(){
@@ -127,7 +127,7 @@ public class MainActivity extends Activity {
  private void history(){
   add(body,txt("Trade History",25,WHITE,true));gap(body,13);
   LinearLayout filters=row();String[] names={"All","Profit","Loss"};for(int i=0;i<3;i++){final int n=i;TextView t=action(names[i],filter==i,()->{filter=n;showShell();});if(i==0)weighted(filters,t,false);else weighted(filters,t,true);}add(body,filters);gap(body,12);
-  LinearLayout total=card(body);add(total,txt("Total realized PnL",13,MUTED,false));add(total,txt(preview?"+1.45":"—",27,TEAL,true));line(total,preview?"Contoh riwayat • USD":"Profit close deal ditampilkan per transaksi; total net belum dihitung.");
+  LinearLayout total=card(body);add(total,txt(preview?"Total realized PnL":"Net PnL lengkap",13,MUTED,false));add(total,txt(preview?"+1.45":"—",27,TEAL,true));line(total,preview?"Contoh riwayat • USD":"Profit close deal per transaksi; belum termasuk rekonsiliasi seluruh biaya dan halaman.");
   if(preview){for(int i=0;i<demoPnl.length;i++){double p=demoPnl[i];if((filter==1&&p<0)||(filter==2&&p>=0))continue;LinearLayout trade=card(body);labelValue(trade,"Contoh #"+(i+1)+" • "+demoSides[i],String.format(Locale.US,"%+.2f USD",p),p>=0?TEAL:RED);line(trade,"Simulasi ilustratif • bukan transaksi Exness");}}
   else{LinearLayout empty=card(body);line(empty,historyStatus);gap(empty,8);add(empty,action("Refresh history",false,()->refreshHistory()));for(int i=deals.length()-1;i>=0;i--){JSONObject item=deals.optJSONObject(i);if(item==null)continue;JSONObject p=item.optJSONObject("deal");if(p==null)continue;JSONObject profit=p.optJSONObject("profit");if(profit==null)continue;try{BigDecimal n=new BigDecimal(profit.getString("amount"));if((filter==1&&n.signum()<=0)||(filter==2&&n.signum()>=0))continue;LinearLayout trade=card(body);labelValue(trade,p.optString("instrument")+" • "+p.optString("direction"),amount(n)+" "+profit.optString("currency"),pnlColor(n));line(trade,item.optString("event_time"));line(trade,"Volume: "+p.optString("volume")+" • Harga: "+p.optString("price"));}catch(Exception ignored){}}}
  }
