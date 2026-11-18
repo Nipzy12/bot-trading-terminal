@@ -137,10 +137,10 @@ public class MainActivity extends Activity {
   line(c,"PAPER EXECUTION • tick Exness. Order riil belum diaktifkan.");
   gap(c,10);LinearLayout controls=row();weighted(controls,action("START BOT",true,()->startBot()),false);weighted(controls,action("STOP BOT",false,()->stopBot("STOPPED",false)),true);add(c,controls);
   gap(c,8);add(c,action("EMERGENCY CLOSE ALL (PAPER)",false,()->emergencyPaper()));
-  LinearLayout p=card(body);add(p,txt("Active strategy",17,WHITE,true));gap(p,12);labelValue(p,"Strategy","Adaptive hedge • EMA tick 9/21",TEAL);labelValue(p,"Instrument",paperSymbol.isEmpty()?(preferredSymbol.isEmpty()?"XAUUSD / auto suffix":preferredSymbol):paperSymbol,WHITE);gap(p,6);add(p,action("Pilih simbol XAUUSD",false,()->selectSymbol()));labelValue(p,"Volume","0.01 lot",WHITE);labelValue(p,"Profit target",paper!=null&&!paperFeeKnown?"$1 gross / posisi":"$1 / posisi (estimasi)",TEAL);line(p,"Komisi: "+paperFeeDescription);labelValue(p,"Entry cooldown","30 detik",WHITE);labelValue(p,"Position cap","5",WHITE);labelValue(p,"Drawdown guard","15%",RED);line(p,"Modal virtual $100; margin asumsi $5/posisi; biaya komisi estimasi. Tidak termasuk swap, slippage atau stop-out broker.");line(p,"Engine hanya saat APK aktif; Stop membekukan entry dan close otomatis. Sesi virtual tersimpan di RAM, hilang jika proses APK mati.");
+  LinearLayout p=card(body);add(p,txt("Active strategy",17,WHITE,true));gap(p,12);labelValue(p,"Strategy","Adaptive hedge • EMA tick 9/21",TEAL);labelValue(p,"Instrument",paperSymbol.isEmpty()?(preferredSymbol.isEmpty()?"XAUUSD / auto suffix":preferredSymbol):paperSymbol,WHITE);gap(p,6);add(p,action("Pilih simbol XAUUSD",false,()->selectSymbol()));labelValue(p,"Volume","0.01 lot",WHITE);labelValue(p,"Profit target",paper!=null&&!paperFeeKnown?"$1 gross / posisi":"$1 / posisi (estimasi)",TEAL);line(p,"Komisi: "+paperFeeDescription);labelValue(p,"Entry cooldown","30 detik",WHITE);labelValue(p,"Position cap","5",WHITE);labelValue(p,"Drawdown guard","15%",RED);line(p,"Modal virtual $100; margin asumsi $5/posisi; biaya hanya jika model tersedia. Tidak termasuk swap, slippage atau stop-out broker.");line(p,"Engine hanya saat APK aktif; Stop membekukan entry dan close otomatis. Sesi virtual tersimpan di RAM, hilang jika proses APK mati.");
   if(paper!=null){
    LinearLayout v=card(body);add(v,txt("Virtual trading account",17,WHITE,true));gap(v,8);labelValue(v,paperFeeKnown?"Balance (estimasi)":"Balance gross paper",String.format(java.util.Locale.US,"$%.2f",paper.balance),WHITE);boolean fresh=paper.fresh(System.currentTimeMillis())&&ticks!=null;
-   labelValue(v,"Equity",fresh?String.format(java.util.Locale.US,"$%.2f",paper.equity()):"—",WHITE);labelValue(v,paperFeeKnown?"Floating PnL (estimasi)":"Floating PnL gross",fresh?String.format(java.util.Locale.US,"%+.2f",paper.floating()):"—",TEAL);labelValue(v,"Open / Closed",paper.open.size()+" / "+paper.closed.size(),WHITE);
+   labelValue(v,paperFeeKnown?"Equity (estimasi)":"Equity gross paper",fresh?String.format(java.util.Locale.US,"$%.2f",paper.equity()):"—",WHITE);labelValue(v,paperFeeKnown?"Floating PnL (estimasi)":"Floating PnL gross",fresh?String.format(java.util.Locale.US,"%+.2f",paper.floating()):"—",TEAL);labelValue(v,"Open / Closed",paper.open.size()+" / "+paper.closed.size(),WHITE);
    if(fresh)labelValue(v,"Bid / Ask",String.format(java.util.Locale.US,"%.3f / %.3f",paper.bid,paper.ask),WHITE);
    for(PaperHedge.Position pos:paper.open)labelValue(v,(pos.buy?"BUY ":"SELL ")+String.format(java.util.Locale.US,"%.3f",pos.entry),fresh?String.format(java.util.Locale.US,"%+.2f",pos.pnl(paper.bid,paper.ask,paper.units,paper.fee)):"—",WHITE);
   }
@@ -149,9 +149,9 @@ public class MainActivity extends Activity {
  private void logBot(String message){if(botLogs.size()>=12)botLogs.removeFirst();botLogs.addLast(new java.text.SimpleDateFormat("HH:mm:ss",java.util.Locale.US).format(new java.util.Date())+"  "+message);}
  private void renderBot(){if(tab==2&&!isDestroyed()&&!isFinishing())showShell();}
  private void selectSymbol(){
-  if(botStarting||ticks!=null||(paper!=null&&!paper.open.isEmpty())){Toast.makeText(this,"Stop dan tutup sesi paper sebelum mengubah simbol.",Toast.LENGTH_LONG).show();return;}
+  if(botStarting||(paper!=null&&(paper.running||!paper.open.isEmpty()))){Toast.makeText(this,"Stop dan tutup sesi paper sebelum mengubah simbol.",Toast.LENGTH_LONG).show();return;}
   EditText input=new EditText(this);input.setText(preferredSymbol);input.setHint("Kosong = auto; contoh XAUUSDm");
-  new AlertDialog.Builder(this).setTitle("Simbol XAUUSD").setMessage("Gunakan nama yang tersedia di akun Exness. Tidak mencoba simbol tebakan.").setView(input).setNegativeButton("Batal",null).setPositiveButton("Simpan",(d,w)->{String v=input.getText().toString().trim();if(!v.isEmpty()&&!v.matches("XAUUSD[a-z0-9._-]{0,5}")){Toast.makeText(this,"Format simbol tidak valid",Toast.LENGTH_SHORT).show();return;}preferredSymbol=v;prefs.edit().putString("paper_symbol",v).apply();paper=null;paperSymbol="";paperFeeDescription="Belum diperiksa";renderBot();}).show();
+  new AlertDialog.Builder(this).setTitle("Simbol XAUUSD").setMessage("Gunakan nama yang tersedia di akun Exness. Mengganti simbol mereset sesi paper lokal yang sudah ditutup.").setView(input).setNegativeButton("Batal",null).setPositiveButton("Simpan",(d,w)->{String v=input.getText().toString().trim();if(!v.isEmpty()&&!v.matches("XAUUSD[a-z0-9._-]{0,5}")){Toast.makeText(this,"Format simbol tidak valid",Toast.LENGTH_SHORT).show();return;}stopBot("STOPPED",true);preferredSymbol=v;prefs.edit().putString("paper_symbol",v).apply();paper=null;paperSymbol="";paperFeeDescription="Belum diperiksa";renderBot();}).show();
  }
  private String optionalText(JSONObject j,String name){Object raw=j==null?null:j.opt(name);return raw instanceof String?(String)raw:null;}
  private void preflightLog(int run,String message){handler.post(()->{if(run==botGeneration&&botStarting&&!isDestroyed()){logBot(message);renderBot();}});}
@@ -161,6 +161,7 @@ public class MainActivity extends Activity {
   if(paper!=null&&paper.halted&&paper.open.isEmpty()){Toast.makeText(this,"Emergency latch aktif. Sesi paper telah dihentikan.",Toast.LENGTH_LONG).show();return;}
   if(paper!=null&&ticks!=null&&paper.fresh(System.currentTimeMillis())){if(paper.halted){paper.emergency(System.currentTimeMillis());botStatus="EMERGENCY CLOSED";renderBot();return;}paper.start();botStatus="WAITING FOR TICKS";logBot("PAPER START");renderBot();return;}
   if(System.currentTimeMillis()<cooldown){Toast.makeText(this,"Cooldown API aktif.",Toast.LENGTH_SHORT).show();return;}
+  if(ticks!=null){ticks.cancel();ticks=null;if(paper!=null){paper.lastTick=0;paper.bid=Double.NaN;paper.ask=Double.NaN;}}handler.removeCallbacks(watchdog);
   final int run=++botGeneration;final ExnessClient current=client;botStarting=true;botStartTime=System.currentTimeMillis();botStatus="CONNECTING";logBot("Memeriksa akun dan simbol");renderBot();
   final String requestedSymbol=preferredSymbol;
   new Thread(()->{
@@ -169,6 +170,8 @@ public class MainActivity extends Activity {
     JSONObject details=current.details();PreflightPolicy.account(optionalText(details,"currency"),optionalText(details,"trade_mode"));preflightLog(run,"ACCOUNT OK • paper currency USD terpisah");
     stage="INSTRUMENTS";JSONArray symbols=current.instruments().getJSONArray("instruments");java.util.ArrayList<String> names=new java.util.ArrayList<>();
     for(int i=0;i<symbols.length();i++){Object value=symbols.get(i);if(!(value instanceof String))throw new org.json.JSONException("INVALID_SYMBOL_LIST");names.add((String)value);}
+    java.util.ArrayList<String> gold=new java.util.ArrayList<>();for(String sym:names)if(sym.matches("XAUUSD[a-z0-9._-]{0,5}")&&!gold.contains(sym))gold.add(sym);
+    if(gold.size()>1)preflightLog(run,"XAUUSD tersedia: "+String.join(", ",gold.subList(0,Math.min(6,gold.size()))));
     final String actual=PreflightPolicy.symbol(names,requestedSymbol);preflightLog(run,"INSTRUMENT OK • "+actual);
     stage="CONDITIONS";JSONObject cond=current.conditions(actual);if(!actual.equals(optionalText(cond,"instrument")))throw new IllegalArgumentException("INSTRUMENT_MISMATCH");
     final double units=PreflightPolicy.units(optionalText(cond,"contract_size"),optionalText(cond,"volume_min"),optionalText(cond,"volume_max"),optionalText(cond,"volume_step"),optionalText(cond,"quote_currency"),optionalText(cond,"trade_mode"));
@@ -184,7 +187,7 @@ public class MainActivity extends Activity {
      ticks=socketClient.newWebSocket(req,new okhttp3.WebSocketListener(){
       @Override public void onOpen(okhttp3.WebSocket w,okhttp3.Response response){
        if(!"exness-ws-protocol".equals(response.header("Sec-WebSocket-Protocol"))){w.cancel();handler.post(()->{if(run==botGeneration)stopBot("WS PROTOCOL FAILED",true);});return;}
-       try{w.send(new JSONObject().put("id",subId).put("subscribe",new JSONObject().put("event","ticks").put("instruments",new JSONArray().put(actual))).toString());}catch(Exception ex){w.cancel();}
+       try{boolean sent=w.send(new JSONObject().put("id",subId).put("subscribe",new JSONObject().put("event","ticks").put("instruments",new JSONArray().put(actual))).toString());handler.post(()->{if(run==botGeneration){if(!sent){stopBot("WS SUBSCRIBE SEND FAILED",true);return;}logBot("WS OPEN • subscribe terkirim; menunggu data");renderBot();}});}catch(Exception ex){handler.post(()->{if(run==botGeneration)stopBot("WS SUBSCRIBE SEND FAILED",true);});w.cancel();}
       }
       @Override public void onMessage(okhttp3.WebSocket w,String msg){
        if(msg.length()>16384){w.cancel();handler.post(()->{if(run==botGeneration)stopBot("WS FRAME TOO LARGE",true);});return;}
@@ -197,7 +200,7 @@ public class MainActivity extends Activity {
         if(!actual.equals(j.getString("instrument"))||!(j.get("bid") instanceof Number)||!(j.get("ask") instanceof Number))return;
         final double bid=j.getDouble("bid"),ask=j.getDouble("ask");final long ts=java.time.OffsetDateTime.parse(j.getString("timestamp")).toInstant().toEpochMilli();
         handler.post(()->{if(run!=botGeneration||ticks!=w||current!=client||paper==null)return;
-         String prev=paper.note;String result=paper.tick(bid,ask,ts,System.currentTimeMillis());if(result.equals("INVALID_OR_STALE"))return;
+         boolean first=paper.lastTick==0;String prev=paper.note;String result=paper.tick(bid,ask,ts,System.currentTimeMillis());if(result.equals("INVALID_OR_STALE"))return;if(first)logBot("FIRST VALID TICK • "+actual);
          if(paper.halted&&!paper.open.isEmpty())paper.emergency(System.currentTimeMillis());if(paper.running)botStatus="RUNNING / PAPER";else if(paper.halted)botStatus="EMERGENCY";
          if(!prev.equals(result)&&(result.startsWith("PAPER ")||result.equals("HARVEST")||result.startsWith("EMERGENCY")))logBot(result);
          long now=System.currentTimeMillis();if(now-lastBotPaint>=1000){lastBotPaint=now;renderBot();}
